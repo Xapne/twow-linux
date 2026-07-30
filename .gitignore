@@ -1,0 +1,14 @@
+# big community archives, never commit these
+*.zip
+
+# everything setup-native.sh generates or extracts
+/src/
+/build/
+/deps/
+/client/
+/build-configure.log
+
+# server/ fills up with repack files on extraction; keep only the kit
+/server/*
+!/server/*.sh
+!/server/README.linux.md
