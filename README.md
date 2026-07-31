@@ -45,8 +45,11 @@ around.
 ## Other modes
 
 `./setup-native.sh setup` converts without starting; `./setup-native.sh run
-[loglevel]` starts without converting; `./setup-native.sh help` shows all
-modes. Day-to-day operation is documented in `server/README.linux.md`.
+[loglevel]` starts without converting; `./setup-native.sh update` follows
+upstream: it pulls the latest source, rebuilds only what changed, backs up
+the world database, and applies any new schema migrations (stop the world
+server first). `./setup-native.sh help` shows all modes. Day-to-day
+operation is documented in `server/README.linux.md`.
 
 First boot: log in with admin / admin and create your own account from the
 world console. The realm shows OFFLINE in the realm list on local servers;

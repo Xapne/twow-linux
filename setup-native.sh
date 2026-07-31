@@ -462,6 +462,58 @@ interactive_config() {
 }
 
 # -----------------------------------------------------------------------------
+# Update: pull the latest source, rebuild incrementally, back up the world DB,
+# apply new migrations. Refuses while the world server is running.
+# -----------------------------------------------------------------------------
+update_all() {
+  [[ -d "$ROOT/src/.git" ]] || die "no source checkout in src/; run: $0 setup"
+  [[ -x "$SERVER/bin/mangosd" ]] || die "not converted yet; run: $0 setup"
+  if pgrep -x mangosd >/dev/null 2>&1; then
+    die "the world server is running; stop it first (Ctrl+C in its console).
+  Swapping binaries and schema under a live server is how characters get eaten."
+  fi
+  if pgrep -x realmd >/dev/null 2>&1; then
+    pkill -INT -x realmd; sleep 1
+    say "stopped realmd (a running binary cannot be replaced)"
+  fi
+
+  say "pulling latest $BRANCH source"
+  local before after
+  before=$(git -C "$ROOT/src" rev-parse --short HEAD)
+  git -C "$ROOT/src" pull --ff-only \
+    || die "git pull failed (local changes in src/? no network?); nothing was touched"
+  after=$(git -C "$ROOT/src" rev-parse --short HEAD)
+  if [[ "$before" == "$after" ]]; then
+    say "source already at $after; still checking build and migrations"
+  else
+    say "source updated: $before -> $after"
+  fi
+
+  say "rebuilding mangosd and realmd (incremental, only what changed)"
+  [[ -f "$ROOT/build/build.ninja" ]] \
+    || ACE_ROOT="$ROOT/deps/ACE_wrappers" cmake -B "$ROOT/build" -S "$ROOT/src" -GNinja \
+         -DCMAKE_BUILD_TYPE=Release -DDEBUG_SYMBOLS=OFF > "$ROOT/build-configure.log" 2>&1 \
+    || die "cmake configure failed, see $ROOT/build-configure.log"
+  ninja -C "$ROOT/build" mangosd realmd \
+    || die "compile failed; the installed binaries were not touched.
+  Fix the error above or report it on the tortoise-wow GitHub."
+  cp "$ROOT/build/src/mangosd/mangosd" "$ROOT/build/src/realmd/realmd" "$SERVER/bin/"
+  say "installed updated binaries into server/bin/"
+
+  start_native_db
+  mkdir -p "$SERVER/backups"
+  local backup="$SERVER/backups/turtle_world-$(date +%Y%m%d-%H%M%S)-$after.sql.gz"
+  say "backing up turtle_world before migrations"
+  mariadb-dump -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" \
+      --routines --triggers turtle_world | gzip > "$backup" \
+    || die "backup failed; not touching the database"
+  say "backup: ${backup#"$ROOT"/}"
+  ensure_migrations
+
+  say "update complete; start the server with: $0 run"
+}
+
+# -----------------------------------------------------------------------------
 # Run: DB (background) -> realmd (background) -> mangosd (foreground console)
 # -----------------------------------------------------------------------------
 run_all() {
@@ -509,6 +561,11 @@ ${C_BOLD}Modes:${C_RST}
                  MOTD, player limit, starting level.
                  ${C_DIM}Configuration only: converts, builds and starts
                  nothing. Restart the server afterwards to apply.${C_RST}
+  ${C_GREEN}update${C_RST}         after upstream changes: pull the latest 1181dev source,
+                 rebuild only what changed, back up the world database,
+                 then apply any new schema migrations.
+                 ${C_DIM}Refuses while the world server is running; stop it
+                 with Ctrl+C in its console first.${C_RST}
   ${C_GREEN}help${C_RST}           this text
 
 ${C_BOLD}Files:${C_RST}
@@ -534,6 +591,7 @@ case "$mode" in
     ;;
   run) check_deps; run_all "${@:2}" ;;
   interactive) ensure_repack; interactive_config ;;
+  update) check_deps; update_all ;;
   help|-h|--help) usage ;;
   *) warn "unknown mode '$mode'"; usage; exit 1 ;;
 esac
