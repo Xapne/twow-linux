@@ -63,11 +63,13 @@ that is cosmetic.
 
 ## Donations
 
-If this setup saved an evening of fiddling, a small BTC tip is appreciated:
+If this setup saved an evening of fiddling, a small BTC tip is welcome:
 
 ```
 bc1qxsuelwvrs28u43eewj39rpn34g4qtkhpdwwlhe
 ```
+
+Never required, always appreciated.
 
 For personal preservation and educational use, private local play only. No
 public hosting, no monetization.
