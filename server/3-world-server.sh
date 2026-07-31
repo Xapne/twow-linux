@@ -24,4 +24,17 @@ if [[ $# -ge 1 ]]; then
   esac
 fi
 
-exec ./mangosd -c mangosd.conf
+# Loop like the Windows restarter bat. The core exits 2 when it schedules
+# its own restart (AutoRestart, honor calculations); 0 is a clean stop
+# (Ctrl+C in the console); anything else is a crash.
+while :; do
+  set +e
+  ./mangosd -c mangosd.conf
+  code=$?
+  set -e
+  case $code in
+    0) echo "world server stopped cleanly"; exit 0;;
+    2) echo "scheduled restart - bringing the world back"; sleep 2;;
+    *) echo "mangosd exited with code $code - back in 5s (Ctrl+C now to stop for good)"; sleep 5;;
+  esac
+done
