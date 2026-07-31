@@ -11,10 +11,7 @@
 #   build/    native build tree
 #   deps/     locally built ACE library
 #
-# Usage:
-#   ./setup-native.sh          convert if needed, then start everything
-#   ./setup-native.sh setup    convert only
-#   ./setup-native.sh run      start only (refuses if not converted)
+# Usage: ./setup-native.sh help
 # =============================================================================
 set -euo pipefail
 
@@ -247,6 +244,224 @@ ensure_migrations() {
 }
 
 # -----------------------------------------------------------------------------
+# Interactive mode: a guided, clack-style prompt for the most common options.
+# Text fields come pre-filled with the current value (Enter keeps it), lists
+# are picked with the arrow keys. Nothing is written unless a value changed.
+# -----------------------------------------------------------------------------
+C_CYAN=$'\033[36m' C_GREEN=$'\033[32m' C_YELLOW=$'\033[33m'
+C_GRAY=$'\033[90m' C_DIM=$'\033[2m' C_BOLD=$'\033[1m' C_RST=$'\033[0m'
+GUT="${C_GRAY}│${C_RST}"
+CHANGES=()
+
+ui_banner() {
+  printf '\n%s\n' "${C_GRAY}╭────────────────────────────────────────────────╮${C_RST}"
+  printf '%s\n'   "${C_GRAY}│${C_RST}  ${C_BOLD}${C_CYAN}apne's all-in-one CLI${C_RST} for TurtleWoW on Linux   ${C_GRAY}│${C_RST}"
+  printf '%s\n'   "${C_GRAY}╰────────────────────────────────────────────────╯${C_RST}"
+}
+ui_intro() { printf '%s\n%s\n' "${C_GRAY}┌${C_RST}  ${C_BOLD}$1${C_RST}" "$GUT"; }
+ui_note()  { printf '%s  %s\n' "$GUT" "${C_DIM}$1${C_RST}"; }
+ui_warn()  { printf '%s  %s\n' "$GUT" "${C_YELLOW}$1${C_RST}"; }
+ui_outro() { printf '%s\n%s\n\n' "$GUT" "${C_GRAY}└${C_RST}  $1"; }
+
+ui_text() {  # $1 label, $2 current value -> ANSWER (Enter keeps current)
+  if [[ ! -t 0 ]]; then
+    IFS= read -r ANSWER || ANSWER=""
+    [[ -n "$ANSWER" ]] || ANSWER="$2"
+  else
+    printf '%s  %s\n' "${C_CYAN}◆${C_RST}" "$1"
+    IFS= read -rep '│  ' -i "$2" ANSWER || ANSWER="$2"
+    [[ -n "$ANSWER" ]] || ANSWER="$2"
+    printf '\033[2A\r'
+  fi
+  printf '\033[2K%s  %s\n\033[2K%s  %s\n' \
+    "${C_GREEN}◇${C_RST}" "$1" "$GUT" "${C_DIM}$ANSWER${C_RST}"
+}
+
+ui_num() {  # like ui_text but keeps asking until ANSWER is a number
+  while :; do
+    ui_text "$1" "$2"
+    [[ "$ANSWER" =~ ^[0-9]+([.][0-9]+)?$ ]] && return 0
+    ui_warn "that is not a number, try again"
+  done
+}
+
+ui_select() {  # $1 label, $2 default index, $3.. options -> ANSWER = index
+  local label="$1" idx="$2"; shift 2
+  local opts=("$@") n=$# key rest i
+  if [[ ! -t 0 ]]; then
+    IFS= read -r key || key=""
+    [[ "$key" =~ ^[0-9]+$ && "$key" -lt "$n" ]] && idx="$key"
+  else
+    printf '\033[?25l%s  %s\n' "${C_CYAN}◆${C_RST}" "$label"
+    while :; do
+      for i in "${!opts[@]}"; do
+        if (( i == idx )); then
+          printf '\033[2K%s  %s %s\n' "${C_CYAN}│${C_RST}" "${C_GREEN}●${C_RST}" "${opts[i]}"
+        else
+          printf '\033[2K%s  %s %s\n' "$GUT" "${C_GRAY}○${C_RST}" "${C_DIM}${opts[i]}${C_RST}"
+        fi
+      done
+      IFS= read -rsn1 key || key=""
+      if [[ "$key" == $'\x1b' ]]; then
+        rest=""; IFS= read -rsn2 -t 0.05 rest || true; key+="$rest"
+      fi
+      case "$key" in
+        $'\x1b[A'|k) idx=$(( (idx + n - 1) % n )) ;;
+        $'\x1b[B'|j) idx=$(( (idx + 1) % n )) ;;
+        '') break ;;
+      esac
+      printf '\033[%dA' "$n"
+    done
+    printf '\033[%dA\r' $(( n + 1 ))
+  fi
+  ANSWER="$idx"
+  printf '\033[2K%s  %s\n\033[2K%s  %s\n\033[0J\033[?25h' \
+    "${C_GREEN}◇${C_RST}" "$label" "$GUT" "${C_DIM}${opts[idx]}${C_RST}"
+}
+
+conf_get() {  # $1 file, $2 key -> value, quotes and CR stripped
+  sed -n "s/^${2//./\\.}[[:space:]]*=[[:space:]]*//p" "$1" \
+    | tail -1 | tr -d '\r' | sed 's/^"\(.*\)"$/\1/'
+}
+
+conf_set() {  # $1 file, $2 key, $3 value, [$4 = quote]; no-op if unchanged
+  local file="$1" key="$2" val="$3" cur esc
+  cur="$(conf_get "$file" "$key")"
+  [[ "$cur" == "$val" ]] && return 0
+  if ! grep -q "^${key//./\\.}[[:space:]]*=" "$file"; then
+    ui_warn "$key not found in ${file##*/}, skipped"
+    return 0
+  fi
+  CHANGES+=("$key: ${cur:-unset} -> $val")
+  [[ "${4:-}" == quote ]] && val="\"$val\""
+  esc="${val//\\/\\\\}"; esc="${esc//&/\\&}"; esc="${esc//|/\\|}"
+  sed -i "s|^${key//./\\.}[[:space:]]*=.*|$key = $esc|" "$file"
+}
+
+interactive_config() {
+  local M="$SERVER/bin/mangosd.conf" R="$SERVER/bin/realmd.conf" RATE="$SERVER/bin/rate.conf"
+  [[ -f "$M" && -f "$R" ]] || die "no configs in server/bin yet; run: $0 setup"
+  trap 'printf "\033[?25h\n"; exit 130' INT
+
+  # realm name/address live in the turtle_logon DB; bring it up if it exists
+  local have_db=0 rname="" raddr=""
+  if [[ -d "$SERVER/db/mysql" ]]; then
+    start_native_db
+    if rname="$(DB -N -e 'SELECT name FROM turtle_logon.realmlist LIMIT 1' 2>/dev/null)"; then
+      have_db=1
+      raddr="$(DB -N -e 'SELECT address FROM turtle_logon.realmlist LIMIT 1' 2>/dev/null)" || raddr=""
+    fi
+  fi
+
+  ui_banner
+  ui_intro "server configuration"
+  ui_note "Enter keeps the shown value · pick from lists with ↑/↓ + Enter · Ctrl+C quits"
+
+  if (( have_db )); then
+    ui_text "Realm name (shown in the in-game realm list)" "$rname"
+    if [[ "$ANSWER" != "$rname" ]]; then
+      DB -e "UPDATE turtle_logon.realmlist SET name='${ANSWER//\'/\'\'}'"
+      CHANGES+=("realm name: $rname -> $ANSWER")
+    fi
+
+    local defidx=0; [[ -n "$raddr" && "$raddr" != 127.0.0.1 ]] && defidx=1
+    ui_select "Who can connect?" "$defidx" \
+      "Only this machine (127.0.0.1)" \
+      "My local network (LAN play)"
+    if (( ANSWER == 1 )); then
+      local lanip=""
+      [[ -n "$raddr" && "$raddr" != 127.0.0.1 ]] && lanip="$raddr"
+      [[ -n "$lanip" ]] || lanip="$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+' || true)"
+      ui_text "This machine's LAN IP (clients connect here)" "${lanip:-192.168.?.?}"
+      if [[ "$ANSWER" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        if [[ "$ANSWER" != "$raddr" ]]; then
+          DB -e "UPDATE turtle_logon.realmlist SET address='$ANSWER'"
+          CHANGES+=("realm address: ${raddr:-unset} -> $ANSWER")
+        fi
+        conf_set "$R" BindIP 0.0.0.0 quote
+        conf_set "$M" BindIP 0.0.0.0 quote
+      else
+        ui_warn "not an IPv4 address, leaving the realm address unchanged"
+      fi
+    else
+      if [[ "$raddr" != 127.0.0.1 ]]; then
+        DB -e "UPDATE turtle_logon.realmlist SET address='127.0.0.1'"
+        CHANGES+=("realm address: ${raddr:-unset} -> 127.0.0.1")
+      fi
+      conf_set "$R" BindIP 127.0.0.1 quote
+    fi
+  else
+    ui_note "realm name/address live in the database, which is not initialized yet;"
+    ui_note "run '$0 setup' first, then come back here"
+  fi
+
+  local gt gtidx=0 i
+  gt="$(conf_get "$M" GameType)"
+  local gtvals=(0 1 6 8)
+  for i in "${!gtvals[@]}"; do [[ "${gtvals[i]}" == "$gt" ]] && gtidx=$i; done
+  ui_select "Game type" "$gtidx" "Normal / PvE" "PvP" "RP (Turtle default)" "RP-PvP"
+  conf_set "$M" GameType "${gtvals[ANSWER]}"
+
+  ui_text "Message of the day" "$(conf_get "$M" Motd)"
+  conf_set "$M" Motd "$ANSWER" quote
+
+  local xp; xp="$(conf_get "$M" Rate.XP.Kill)"
+  ui_num "XP rate (kill/quest/explore, 1 = Blizzlike)" "$xp"
+  if [[ "$ANSWER" != "$xp" ]]; then
+    conf_set "$M" Rate.XP.Kill "$ANSWER"
+    conf_set "$M" Rate.XP.Quest "$ANSWER"
+    conf_set "$M" Rate.XP.Explore "$ANSWER"
+  fi
+  if [[ -f "$RATE" ]] \
+      && grep -E '^Rate\.XP\.Kill' "$RATE" | tr -d '\r' | grep -vqE '=[[:space:]]*1$'; then
+    ui_select "rate.conf also scales kill XP per level bracket (Turtle tuning)" 0 \
+      "Keep the per-bracket tuning" \
+      "Flatten all brackets to 1x (my XP rate applies at every level)"
+    if (( ANSWER == 1 )); then
+      sed -i 's/^Rate\.XP\.Kill.*/Rate.XP.Kill    = 1/' "$RATE"
+      CHANGES+=("rate.conf: all level brackets flattened to 1x")
+    fi
+  fi
+
+  local dr q; dr="$(conf_get "$M" Rate.Drop.Item.Rare)"
+  ui_num "Item drop rate (all qualities; Turtle ships uncommon at 2x)" "$dr"
+  if [[ "$ANSWER" != "$dr" ]]; then
+    for q in Poor Normal Uncommon Rare Epic Legendary Artifact Referenced; do
+      conf_set "$M" "Rate.Drop.Item.$q" "$ANSWER"
+    done
+  fi
+
+  ui_num "Money drop rate" "$(conf_get "$M" Rate.Drop.Money)"
+  conf_set "$M" Rate.Drop.Money "$ANSWER"
+
+  ui_num "Honor rate" "$(conf_get "$M" Rate.Honor)"
+  conf_set "$M" Rate.Honor "$ANSWER"
+
+  local rr; rr="$(conf_get "$M" Rate.Rest.InGame)"
+  ui_num "Rest bonus rate (inns and cities)" "$rr"
+  if [[ "$ANSWER" != "$rr" ]]; then
+    conf_set "$M" Rate.Rest.InGame "$ANSWER"
+    conf_set "$M" Rate.Rest.Offline.InTavernOrCity "$ANSWER"
+  fi
+
+  ui_num "Player limit (0 = unlimited)" "$(conf_get "$M" PlayerLimit)"
+  conf_set "$M" PlayerLimit "$ANSWER"
+
+  ui_num "Starting level for new characters" "$(conf_get "$M" StartPlayerLevel)"
+  conf_set "$M" StartPlayerLevel "$ANSWER"
+
+  if (( ${#CHANGES[@]} )); then
+    printf '%s\n' "$GUT"
+    local c; for c in "${CHANGES[@]}"; do
+      printf '%s  %s %s\n' "$GUT" "${C_GREEN}✔${C_RST}" "$c"
+    done
+    ui_outro "saved — restart the server ('$0 run') to apply"
+  else
+    ui_outro "nothing changed"
+  fi
+}
+
+# -----------------------------------------------------------------------------
 # Run: DB (background) -> realmd (background) -> mangosd (foreground console)
 # -----------------------------------------------------------------------------
 run_all() {
@@ -272,14 +487,53 @@ run_all() {
 }
 
 # -----------------------------------------------------------------------------
+usage() {
+  cat <<EOF
+
+${C_BOLD}${C_CYAN}apne's all-in-one CLI${C_RST}${C_BOLD} for TurtleWoW 1.18.1 on Linux${C_RST}
+Converts the SIGGZ Windows repack to a fully native Linux server and runs it.
+
+${C_BOLD}Usage:${C_RST}  $0 [mode]
+
+${C_BOLD}Modes:${C_RST}
+  ${C_GREEN}(none)${C_RST}         convert whatever is missing, then start the server
+  ${C_GREEN}setup${C_RST}          convert only: dependencies, repack, map data, source
+                 checkout, ACE + server build, configs, database seed,
+                 schema migrations; every step is skipped once done
+  ${C_GREEN}run${C_RST} [level]    start only: MariaDB and realmd in the background,
+                 mangosd in the foreground as the server console
+                 (Ctrl+C stops it); optional [level] is the mangosd
+                 console log level, 0 (quiet) to 3 (debug)
+  ${C_GREEN}interactive${C_RST}    guided setup screen for the most common options:
+                 realm name, LAN play, game type, XP/drop/honor rates,
+                 MOTD, player limit, starting level.
+                 ${C_DIM}Configuration only: converts, builds and starts
+                 nothing. Restart the server afterwards to apply.${C_RST}
+  ${C_GREEN}help${C_RST}           this text
+
+${C_BOLD}Files:${C_RST}
+  server/bin/mangosd.conf    world server settings (rates, game type, ...)
+  server/bin/realmd.conf     login server settings
+  server/bin/rate.conf       Turtle's per-level-bracket kill XP tuning
+  server/README.linux.md     day-to-day operation guide
+
+First boot: log in with admin / admin and create your own account from the
+world console. See README.md for what to download before the first run.
+
+EOF
+}
+
 mode="${1:-all}"
 case "$mode" in
   setup|all)
     check_deps; ensure_repack; ensure_mapdata; ensure_source; ensure_ace
     ensure_binaries; fix_configs; fix_client; ensure_database; ensure_migrations
     say "conversion complete"
+    say "customize the server anytime with: $0 interactive"
     if [[ "$mode" == all ]]; then run_all "${@:2}"; fi
     ;;
   run) check_deps; run_all "${@:2}" ;;
-  *) die "unknown mode '$mode' (use: setup, run, or no argument for both)" ;;
+  interactive) ensure_repack; interactive_config ;;
+  help|-h|--help) usage ;;
+  *) warn "unknown mode '$mode'"; usage; exit 1 ;;
 esac

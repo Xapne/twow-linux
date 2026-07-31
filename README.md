@@ -28,9 +28,25 @@ git clone <this repo> twow && cd twow
 ```
 
 The script is idempotent: it skips finished steps, so re-run it freely.
+
+## Configure your server
+
+```
+./setup-native.sh interactive
+```
+
+A guided, arrow-key setup screen for the settings most people want to change:
+realm name, LAN play, game type, XP/drop/honor rates, MOTD, player limit and
+starting level. It is configuration only - it never converts, builds, or
+starts anything. Run it any time after setup, then restart the server to
+apply. Enter keeps the current value everywhere, so it is safe to just look
+around.
+
+## Other modes
+
 `./setup-native.sh setup` converts without starting; `./setup-native.sh run
-[loglevel]` starts without converting. Day-to-day operation is documented in
-`server/README.linux.md`.
+[loglevel]` starts without converting; `./setup-native.sh help` shows all
+modes. Day-to-day operation is documented in `server/README.linux.md`.
 
 First boot: log in with admin / admin and create your own account from the
 world console. The realm shows OFFLINE in the realm list on local servers;
