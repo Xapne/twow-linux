@@ -29,6 +29,27 @@ git clone <this repo> twow && cd twow
 
 The script is idempotent: it skips finished steps, so re-run it freely.
 
+## Don't want to touch your OS? Build a machine instead
+
+`setup-vm.sh` runs the whole thing inside a fresh headless Debian VM and
+works from any Linux distro. It checks your host tools (and asks before
+installing anything), downloads Debian's official cloud image, boots it
+with the game ports forwarded, installs every guest dependency, pushes
+your two zips in, runs the conversion with a live progress bar, offers to
+create your GM account, and hands your terminal over as the world console.
+
+```
+./setup-vm.sh          # zero to world console; asks only what it must
+```
+
+Day to day: `console` reattaches the world console, `tune` opens the
+interactive config inside the VM, `ssh` gives a shell, `status` and
+`destroy` do what they say. The realm advertises your LAN address when
+you have one, so clients on this host and on the local network both work
+(if a firewall runs on the host, open tcp 3724 and 8091 for LAN play).
+SSH into the VM on port 2222 (turtle / turtle). The zips can sit in
+`~/twow-vm`, the current directory, or `~/Downloads` - it finds them.
+
 ## Configure your server
 
 ```
