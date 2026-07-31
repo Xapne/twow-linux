@@ -362,13 +362,13 @@ handoff() {
   ui_intro "starting the world"
   note "realmd + MariaDB stay in the background; mangosd runs in THIS terminal"
   note "first boot loads every map - give it a few minutes"
-  note "prove it is alive:   server info"
+  note "prove it is alive:   server info   (console log level is 1 = errors only)"
   note "make a GM account:   account create <name> <pass>  +  account set gmlevel <name> 3"
   note "stop the world:      Ctrl+C   (VM keeps running; '$0 console' returns here)"
   note "make it yours:       $0 tune   (realm name, rates, LAN play)"
   ui_outro "handing over in 3 seconds"
   sleep 3
-  exec ssh -t "${SSHOPTS[@]}" turtle@127.0.0.1 'cd twow && ./setup-native.sh run'
+  exec ssh -t "${SSHOPTS[@]}" turtle@127.0.0.1 'cd twow && ./setup-native.sh run 1'
 }
 
 # =============================================================================
@@ -422,7 +422,7 @@ main() {
     status)  status; exit 0;;
     destroy) ui_banner; destroy; exit 0;;
     ssh)     exec ssh -t "${SSHOPTS[@]}" turtle@127.0.0.1;;
-    console) exec ssh -t "${SSHOPTS[@]}" turtle@127.0.0.1 'cd twow && ./setup-native.sh run';;
+    console) exec ssh -t "${SSHOPTS[@]}" turtle@127.0.0.1 'cd twow && ./setup-native.sh run 1';;
     tune)    exec ssh -t "${SSHOPTS[@]}" turtle@127.0.0.1 'cd twow && ./setup-native.sh interactive';;
     "") ;;
     *) usage; die "unknown mode: $1";;

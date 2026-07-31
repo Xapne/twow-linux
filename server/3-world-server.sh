@@ -15,7 +15,11 @@ if [[ $# -ge 1 ]]; then
   case "$1" in
     [0-3])
       sed -i -E "s/^LogLevel = [0-9]+/LogLevel = $1/" mangosd.conf
-      echo "console LogLevel set to $1 ($(grep -m1 '^LogLevel' mangosd.conf))"
+      # quiet levels also mute the per-query SQL echo (LogFilter_SQLText),
+      # chatty levels show it; it prints at basic level regardless of LogLevel
+      if [[ "$1" -le 1 ]]; then sqlfilter=1; else sqlfilter=0; fi
+      sed -i -E "s/^LogFilter_SQLText = [0-9]+/LogFilter_SQLText = $sqlfilter/" mangosd.conf
+      echo "console LogLevel set to $1, SQL echo $([[ $sqlfilter == 1 ]] && echo off || echo on)"
       ;;
     *)
       echo "error: loglevel must be 0, 1, 2 or 3 (got '$1')" >&2
