@@ -423,13 +423,17 @@ interactive_config() {
     fi
   fi
 
+  # Scales Turtle's shipped tuning (uncommon 2x, everything else 1x), so
+  # 1 always restores the authentic defaults no matter what was set before.
   local dr q; dr="$(conf_get "$M" Rate.Drop.Item.Rare)"
-  ui_num "Item drop rate (all qualities; Turtle ships uncommon at 2x)" "$dr"
-  if [[ "$ANSWER" != "$dr" ]]; then
-    for q in Poor Normal Uncommon Rare Epic Legendary Artifact Referenced; do
+  ui_num "Item drop rate (1 = Turtle default: uncommon 2x, rest 1x)" "$dr"
+  for q in Poor Normal Uncommon Rare Epic Legendary Artifact Referenced; do
+    if [[ "$q" == Uncommon ]]; then
+      conf_set "$M" "Rate.Drop.Item.$q" "$(awk -v a="$ANSWER" 'BEGIN{print a*2}')"
+    else
       conf_set "$M" "Rate.Drop.Item.$q" "$ANSWER"
-    done
-  fi
+    fi
+  done
 
   ui_num "Money drop rate" "$(conf_get "$M" Rate.Drop.Money)"
   conf_set "$M" Rate.Drop.Money "$ANSWER"
