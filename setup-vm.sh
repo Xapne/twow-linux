@@ -293,7 +293,7 @@ $(grep -A3 '\[error\]' <<<"$tail")"
     fi
     # milestones -> percent; the compile maps its [n/total] onto 35..85
     local ninja
-    ninja=$(grep -oE '^\[[0-9]+/[0-9]+\]' <<<"$tail" | tail -1 | tr -d '[]')
+    ninja=$(grep -oE '^\[[0-9]+/[0-9]+\]' <<<"$tail" | tail -1 | tr -d '[]' || true)
     if   [[ -n "$ninja" ]]; then
       local done_n=${ninja%/*} total_n=${ninja#*/}
       pct=$(( 35 + done_n * 50 / (total_n>0?total_n:1) )); label="compiling mangosd + realmd [$ninja]"
