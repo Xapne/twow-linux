@@ -490,8 +490,11 @@ update_all() {
   fi
 
   say "rebuilding mangosd and realmd (incremental, only what changed)"
+  # ninja re-runs cmake itself when the source's build files changed, and that
+  # re-run needs ACE_ROOT in the environment just like the first configure
+  export ACE_ROOT="$ROOT/deps/ACE_wrappers"
   [[ -f "$ROOT/build/build.ninja" ]] \
-    || ACE_ROOT="$ROOT/deps/ACE_wrappers" cmake -B "$ROOT/build" -S "$ROOT/src" -GNinja \
+    || cmake -B "$ROOT/build" -S "$ROOT/src" -GNinja \
          -DCMAKE_BUILD_TYPE=Release -DDEBUG_SYMBOLS=OFF > "$ROOT/build-configure.log" 2>&1 \
     || die "cmake configure failed, see $ROOT/build-configure.log"
   ninja -C "$ROOT/build" mangosd realmd \
