@@ -281,7 +281,9 @@ convert() {
     poll=$(vm 'tail -n 30 twow/setup.log 2>/dev/null | tr -d "\r"; pgrep -f setup-native.sh >/dev/null && echo "==ALIVE==" || echo "==DEAD=="' 2>/dev/null) || poll=""
     [[ -z "$poll" ]] && continue
     if grep -q '==DEAD==' <<<"$poll"; then alive=no; else alive=yes; fi
-    tail=$(grep -v '^==\(ALIVE\|DEAD\)==$' <<<"$poll")
+    # '|| true': on the first polls the log can still be empty, leaving only
+    # the marker line - a fully filtered grep exits 1 and set -e would kill us
+    tail=$(grep -v '^==\(ALIVE\|DEAD\)==$' <<<"$poll" || true)
     if grep -q '\[error\]' <<<"$tail"; then
       printf '\n'; die "conversion failed inside the VM:
 $(grep -A3 '\[error\]' <<<"$tail")"
