@@ -273,10 +273,15 @@ convert() {
   say "running the conversion (this is the long one: full compile + db seed)"
   vm 'cd twow && rm -f setup.log && (nohup ./setup-native.sh setup > setup.log 2>&1 & echo started)' >/dev/null
 
-  local t=0 pct=2 label="checking dependencies" tail=""
+  local t=0 pct=2 label="checking dependencies" tail="" poll="" alive=""
   while :; do
     sleep 3; t=$((t+3))
-    tail=$(vm 'tail -n 30 twow/setup.log 2>/dev/null | tr -d "\r"' || true)
+    # one ssh per poll, carrying the log tail AND the liveness flag together;
+    # an empty poll is a transient ssh hiccup, never a verdict
+    poll=$(vm 'tail -n 30 twow/setup.log 2>/dev/null | tr -d "\r"; pgrep -f setup-native.sh >/dev/null && echo "==ALIVE==" || echo "==DEAD=="' 2>/dev/null) || poll=""
+    [[ -z "$poll" ]] && continue
+    if grep -q '==DEAD==' <<<"$poll"; then alive=no; else alive=yes; fi
+    tail=$(grep -v '^==\(ALIVE\|DEAD\)==$' <<<"$poll")
     if grep -q '\[error\]' <<<"$tail"; then
       printf '\n'; die "conversion failed inside the VM:
 $(grep -A3 '\[error\]' <<<"$tail")"
@@ -300,12 +305,14 @@ $(grep -A3 '\[error\]' <<<"$tail")"
     elif grep -q 'extracting repack'        <<<"$tail"; then pct=6;  label="extracting the repack"
     fi
     bar "$pct" "$label  ${C_GRAY}$((t/60))m$((t%60))s${C_RST}"
-    if ! vm 'pgrep -f setup-native.sh >/dev/null'; then
-      # process gone without the completion line -> re-check once, then fail
+    if [[ "$alive" == no ]]; then
+      # confirmed dead in the same poll that read the log: re-check the log
+      # once for a completion we may have raced, then fail for real
       sleep 2
-      vm 'grep -q "conversion complete" twow/setup.log' \
+      vm 'grep -q "conversion complete" twow/setup.log' 2>/dev/null \
         || { printf '\n'; die "setup-native.sh stopped early - last log lines:
-$(vm 'tail -n 15 twow/setup.log')"; }
+$(vm 'tail -n 15 twow/setup.log' 2>/dev/null)"; }
+      bar 100 "conversion complete"; printf '\n'; break
     fi
   done
 }
