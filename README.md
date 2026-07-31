@@ -61,5 +61,13 @@ that is cosmetic.
 - [Kes](https://ko-fi.com/scribblesbykes) (NoGuiltGaming) for the Windows setup guide this follows
 - The TurtleWoW preservation [Discord](https://discord.gg/kpnCR644kk)
 
+## Donations
+
+If this setup saved an evening of fiddling, a small BTC tip is appreciated:
+
+```
+bc1qxsuelwvrs28u43eewj39rpn34g4qtkhpdwwlhe
+```
+
 For personal preservation and educational use, private local play only. No
 public hosting, no monetization.
