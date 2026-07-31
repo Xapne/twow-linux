@@ -29,7 +29,7 @@ die()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
 DB() { mariadb -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" --max-allowed-packet=128M "$@"; }
 
 # -----------------------------------------------------------------------------
-# Step 0: dependencies, with the exact package to install when one is missing
+# dependencies, with the exact package to install when one is missing
 # -----------------------------------------------------------------------------
 check_deps() {
   local -A pkg=(
@@ -47,7 +47,7 @@ check_deps() {
 }
 
 # -----------------------------------------------------------------------------
-# Step 1: repack files in server/
+# repack files in server/
 # -----------------------------------------------------------------------------
 ensure_repack() {
   if [[ -f "$SERVER/turtle_world.sql" && -d "$SERVER/bin" ]]; then
@@ -62,7 +62,7 @@ ensure_repack() {
 }
 
 # -----------------------------------------------------------------------------
-# Step 2: map data in server/data (dbc, maps, mmaps, vmaps)
+# map data in server/data (dbc, maps, mmaps, vmaps)
 # -----------------------------------------------------------------------------
 ensure_mapdata() {
   local ok=1 d
@@ -78,7 +78,7 @@ ensure_mapdata() {
 }
 
 # -----------------------------------------------------------------------------
-# Step 3: source checkout
+# source checkout
 # -----------------------------------------------------------------------------
 ensure_source() {
   if [[ -f "$ROOT/src/CMakeLists.txt" ]]; then say "source already in src/"; return; fi
@@ -88,7 +88,7 @@ ensure_source() {
 }
 
 # -----------------------------------------------------------------------------
-# Step 4: ACE library (not packaged on Arch; built locally)
+# ACE library (not packaged on Arch; built locally)
 # -----------------------------------------------------------------------------
 ensure_ace() {
   export ACE_ROOT="$ROOT/deps/ACE_wrappers"
@@ -109,7 +109,7 @@ ensure_ace() {
 }
 
 # -----------------------------------------------------------------------------
-# Step 5: build realmd + mangosd, install into server/bin
+# build realmd + mangosd, install into server/bin
 # -----------------------------------------------------------------------------
 ensure_binaries() {
   if [[ -x "$SERVER/bin/mangosd" && -x "$SERVER/bin/realmd" ]]; then
@@ -126,7 +126,7 @@ ensure_binaries() {
 }
 
 # -----------------------------------------------------------------------------
-# Step 6: config fixes needed on Linux
+# config fixes needed on Linux
 # -----------------------------------------------------------------------------
 fix_configs() {
   local f
@@ -140,7 +140,7 @@ fix_configs() {
 }
 
 # -----------------------------------------------------------------------------
-# Step 6b: client safety, if a client is present in client/
+# client safety, if a client is present in client/
 #   - defuse the live launcher, which patches the client and needs WebView2
 #   - report where realmlist points (never changed here: LAN setups use
 #     the host's IP, see the setup guide, Section 14)
@@ -158,7 +158,7 @@ fix_client() {
 }
 
 # -----------------------------------------------------------------------------
-# Step 7: native database in server/db, seeded from the bundled Windows one
+# native database in server/db, seeded from the bundled Windows one
 # -----------------------------------------------------------------------------
 mariadb_running() { mariadb --socket="$SERVER/db/mysql.sock" -u root -p"$DB_PASS" -e "SELECT 1" >/dev/null 2>&1; }
 
@@ -235,7 +235,7 @@ EOF
 }
 
 # -----------------------------------------------------------------------------
-# Step 8: bring the world DB schema up to what the compiled source expects
+# bring the world DB schema up to what the compiled source expects
 # -----------------------------------------------------------------------------
 ensure_migrations() {
   [[ -x "$SERVER/apply-db-updates.sh" ]] \
