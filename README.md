@@ -5,9 +5,9 @@ native MariaDB, native `realmd` and `mangosd` compiled from the same source
 the repack is built from (Penqle's tortoise-wow, branch 1181dev). No Wine in
 the server stack. The game client still runs under Wine, as usual.
 
-Tested on Arch Linux. The dependency checks name Arch packages; on other
-distros install the equivalents (gcc, cmake, ninja, git, curl, libarchive,
-mariadb) and it should work the same.
+Works on any Linux distro: the dependency check names the right packages
+for Debian/Ubuntu, Fedora, openSUSE and Arch, and finds the MariaDB daemon
+wherever your distro keeps it. Tested on Arch and Debian 13.
 
 ## What you need
 

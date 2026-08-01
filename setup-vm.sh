@@ -252,7 +252,7 @@ provision() {
   if vm 'command -v ninja >/dev/null && command -v mariadbd >/dev/null && test -d twow' 2>/dev/null; then
     say "guest already provisioned"; return
   fi
-  say "provisioning the guest (apt + Debian quirk fixes + the kit)"
+  say "provisioning the guest (apt + the kit)"
   note "full log: $WD/logs/provision.log"
   vm "KIT_REPO='$KIT_REPO' bash -s" > "$WORKDIR/logs/provision.log" 2>&1 <<'GUEST' || die "provisioning failed, see $WD/logs/provision.log"
 set -euo pipefail
@@ -264,8 +264,6 @@ sudo apt-get install -y -qq build-essential cmake ninja-build git curl \
   mariadb-server mariadb-client wine
 # quirk 1: Debian autostarts a system mariadb on 3306; the kit runs its own
 sudo systemctl disable --now mariadb
-# quirk 2: Debian ships the daemon in /usr/sbin, the kit expects /usr/bin
-sudo ln -sf /usr/sbin/mariadbd /usr/bin/mariadbd
 [ -d twow ] || git clone -q "$KIT_REPO" twow
 GUEST
   say "guest provisioned"

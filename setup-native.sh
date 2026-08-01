@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # TurtleWoW 1.18.1: convert the SIGGZ Windows repack to a native Linux server
-# and run it, in one command. Arch Linux oriented; every step is idempotent,
+# and run it, in one command. Works on any Linux distro; every step is idempotent,
 # so re-running only does what is missing.
 #
 # Layout it expects (and creates) under the folder this script lives in:
@@ -31,19 +31,85 @@ DB() { mariadb -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" --max-allo
 # -----------------------------------------------------------------------------
 # dependencies, with the exact package to install when one is missing
 # -----------------------------------------------------------------------------
+# What this distro calls things. Falls back to Arch names with a note when
+# the distro is unknown; INSTALL is the command that would install them.
+detect_distro() {
+  local id
+  # shellcheck source=/dev/null
+  id=$(. "${OS_RELEASE:-/etc/os-release}" 2>/dev/null && echo "${ID:-} ${ID_LIKE:-}") || id=""
+  case " $id " in
+    *" debian "*|*" ubuntu "*)
+      INSTALL="sudo apt install -y"
+      PKG_BUILD="build-essential"; PKG_NINJA="ninja-build"; PKG_TAR="libarchive-tools"
+      PKG_DB="mariadb-server mariadb-client"; PKG_WINE="wine"
+      PKG_DEV="default-libmysqlclient-dev libssl-dev zlib1g-dev";;
+    *" fedora "*|*" rhel "*|*" centos "*)
+      INSTALL="sudo dnf install -y"
+      PKG_BUILD="gcc gcc-c++ make cmake"; PKG_NINJA="ninja-build"; PKG_TAR="bsdtar"
+      PKG_DB="mariadb-server mariadb"; PKG_WINE="wine"
+      PKG_DEV="mariadb-connector-c-devel openssl-devel zlib-devel";;
+    *" suse "*|*" opensuse "*)
+      INSTALL="sudo zypper install -y"
+      PKG_BUILD="gcc gcc-c++ make cmake"; PKG_NINJA="ninja"; PKG_TAR="bsdtar"
+      PKG_DB="mariadb mariadb-client"; PKG_WINE="wine"
+      PKG_DEV="libmariadb-devel libopenssl-devel zlib-devel";;
+    *)
+      INSTALL="sudo pacman -S --needed"
+      PKG_BUILD="gcc make cmake"; PKG_NINJA="ninja"; PKG_TAR="libarchive"
+      PKG_DB="mariadb"; PKG_WINE="wine"
+      PKG_DEV=""  # Arch ships headers with the runtime packages
+      case " $id " in *" arch "*|*" manjaro "*|*" endeavouros "*) ;; *)
+        [[ -n "$id" ]] && UNKNOWN_DISTRO=1;; esac;;
+  esac
+}
+
+# The daemon lives in a different place on every distro, and some of them
+# keep sbin out of a normal user's PATH. Look everywhere, print the path.
+find_mariadbd() {
+  local c p
+  for c in mariadbd mysqld; do
+    p=$(command -v "$c" 2>/dev/null) && { echo "$p"; return 0; }
+  done
+  for p in /usr/sbin/mariadbd /usr/libexec/mariadbd /usr/local/sbin/mariadbd \
+           /usr/sbin/mysqld /usr/libexec/mysqld /usr/local/sbin/mysqld; do
+    [[ -x "$p" ]] && { echo "$p"; return 0; }
+  done
+  return 1
+}
+
 check_deps() {
   local -A pkg=(
-    [gcc]=gcc [g++]=gcc [cmake]=cmake [ninja]=ninja [git]=git [curl]=curl
-    [bsdtar]=libarchive [sha1sum]=coreutils
-    [mariadb]=mariadb [mariadbd]=mariadb [mariadb-install-db]=mariadb
-    [mariadb-dump]=mariadb [mariadb-admin]=mariadb
+    [gcc]=$PKG_BUILD [g++]=$PKG_BUILD [make]=$PKG_BUILD [cmake]=$PKG_BUILD
+    [ninja]=$PKG_NINJA [git]=git [curl]=curl
+    [bsdtar]=$PKG_TAR [sha1sum]=coreutils
+    [mariadb]=$PKG_DB [mariadb-install-db]=$PKG_DB
+    [mariadb-dump]=$PKG_DB [mariadb-admin]=$PKG_DB
   )
-  local missing=()
+  local missing=() c
   for c in "${!pkg[@]}"; do
-    command -v "$c" >/dev/null 2>&1 || missing+=("$c (pacman -S ${pkg[$c]})")
+    command -v "$c" >/dev/null 2>&1 || missing+=("$c (${pkg[$c]})")
   done
-  ((${#missing[@]} == 0)) || die "missing commands: ${missing[*]}"
-  say "all required commands present"
+  find_mariadbd >/dev/null || missing+=("mariadbd ($PKG_DB)")
+
+  # Headers, not binaries: distros that split -dev packages pass every command
+  # check above and then fail in cmake. Catch it here instead.
+  local h hdr_missing=()
+  for h in mysql/mysql.h mariadb/mysql.h; do
+    [[ -f "/usr/include/$h" ]] && { hdr_missing=(); break; }
+    hdr_missing=(MySQL)
+  done
+  [[ -f /usr/include/openssl/ssl.h ]] || hdr_missing+=(OpenSSL)
+  [[ -f /usr/include/zlib.h ]]        || hdr_missing+=(ZLIB)
+
+  if ((${#missing[@]})) || ((${#hdr_missing[@]})); then
+    local msg="missing dependencies:"
+    ((${#missing[@]}))     && msg+=$'\n  commands: '"${missing[*]}"
+    ((${#hdr_missing[@]})) && msg+=$'\n  headers:  '"${hdr_missing[*]} (development packages)"
+    msg+=$'\n\n  '"$INSTALL $PKG_BUILD $PKG_NINJA git curl $PKG_TAR $PKG_DB${PKG_DEV:+ $PKG_DEV}"
+    [[ -n "${UNKNOWN_DISTRO:-}" ]] && msg+=$'\n  (unrecognized distro; those are Arch package names, adapt as needed)'
+    die "$msg"
+  fi
+  say "all required commands and headers present"
 }
 
 # -----------------------------------------------------------------------------
@@ -88,7 +154,7 @@ ensure_source() {
 }
 
 # -----------------------------------------------------------------------------
-# ACE library (not packaged on Arch; built locally)
+# ACE library (rarely packaged; built locally)
 # -----------------------------------------------------------------------------
 ensure_ace() {
   export ACE_ROOT="$ROOT/deps/ACE_wrappers"
@@ -167,7 +233,11 @@ start_native_db() {
   ss -tln | grep -q ":$DB_PORT " && die "port $DB_PORT is in use by something that is not our database.
   Stop it first (is a system mysqld/mariadbd service running?)."
   say "starting native MariaDB"
-  nohup /usr/bin/mariadbd --defaults-file="$SERVER/my.cnf" > "$SERVER/logs/mysql.out" 2>&1 &
+  # distros disagree on where the daemon lives (/usr/bin on Arch, /usr/sbin on
+  # Debian, /usr/libexec on Fedora); ask the shell instead of guessing
+  local mariadbd; mariadbd=$(find_mariadbd) \
+    || die "no mariadbd/mysqld found; install $PKG_DB"
+  nohup "$mariadbd" --defaults-file="$SERVER/my.cnf" > "$SERVER/logs/mysql.out" 2>&1 &
   local i; for i in $(seq 1 30); do [[ -S "$SERVER/db/mysql.sock" ]] && break; sleep 1; done
   [[ -S "$SERVER/db/mysql.sock" ]] || die "MariaDB did not come up, see $SERVER/logs/mysql.out"
 }
@@ -212,7 +282,7 @@ EOF
   # Seed: dump the four preloaded DBs out of the bundled Windows MariaDB.
   # One-time only; needs wine. Runs on port 3307 so it cannot clash.
   command -v wine >/dev/null 2>&1 \
-    || die "game databases are empty and seeding them needs wine once (pacman -S wine).
+    || die "game databases are empty and seeding them needs wine once ($INSTALL $PKG_WINE).
   Alternative: import dumps you already have into $DB_HOST:$DB_PORT."
   local windb="$SERVER/mariadb-10.3.39-winx64"
   [[ -d "$windb/data/turtle_logon" ]] \
@@ -586,6 +656,8 @@ world console. See README.md for what to download before the first run.
 
 EOF
 }
+
+detect_distro   # package names and the daemon hint, whatever mode we run
 
 mode="${1:-all}"
 case "$mode" in
