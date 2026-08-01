@@ -42,6 +42,28 @@ create your GM account, and hands your terminal over as the world console.
 ./setup-vm.sh          # zero to world console; asks only what it must
 ```
 
+### Requirements
+
+x86_64 with KVM (virtualization on in BIOS, your user in the `kvm` group),
+8 GB RAM, 15 GB free disk, and ports 2222/3724/8091 free. First run takes
+15-45 minutes depending on cores; after that it starts in seconds. The
+script checks all of it up front, and warns but keeps going if RAM is tight.
+
+### Changing the VM's hardware
+
+Environment variables, no editing:
+
+```
+TWOW_VM_CPUS=4 TWOW_VM_MEM=8G ./setup-vm.sh
+TWOW_VM_DISK=60G ./setup-vm.sh                   # only on first run
+TWOW_VM_DIR=/mnt/games/twow-vm ./setup-vm.sh     # another drive
+TWOW_SSH_PORT=2299 ./setup-vm.sh
+```
+
+By default the VM gets half your RAM (4-12 GB) and up to 8 cores. Cores
+matter for the compile, nothing else. Disk size is fixed at creation:
+`destroy` and run again, or `qemu-img resize` and grow it in the guest.
+
 Day to day: `console` reattaches the world console, `tune` opens the
 interactive config inside the VM, `ssh` gives a shell, `status` and
 `destroy` do what they say. The realm advertises your LAN address when

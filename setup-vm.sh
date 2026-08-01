@@ -19,10 +19,14 @@ WORKDIR="${TWOW_VM_DIR:-$HOME/twow-vm}"
 IMG_URL=https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2
 IMG=debian-cloud.qcow2
 DISK=turtle.qcow2
-DISK_SIZE=40G
-SSH_PORT=2222 REALM_PORT=3724 WORLD_PORT=8091
-VM_CPUS=$(( $(nproc) < 8 ? $(nproc) : 8 ))
-VM_MEM=12G
+DISK_SIZE="${TWOW_VM_DISK:-40G}"
+SSH_PORT="${TWOW_SSH_PORT:-2222}" REALM_PORT=3724 WORLD_PORT=8091
+# Hardware: adapt to the host, override with TWOW_VM_CPUS / TWOW_VM_MEM.
+# Cores speed up the one big compile; 4 GB is enough to build and run, more
+# only helps the world server cache maps.
+VM_CPUS="${TWOW_VM_CPUS:-$(( $(nproc) < 8 ? $(nproc) : 8 ))}"
+host_mem_gb=$(( $(awk '/MemTotal/{print $2}' /proc/meminfo) / 1024 / 1024 ))
+VM_MEM="${TWOW_VM_MEM:-$(( host_mem_gb / 2 < 12 ? (host_mem_gb / 2 < 4 ? 4 : host_mem_gb / 2) : 12 ))G}"
 KIT_REPO=https://github.com/Xapne/twow-linux.git
 # on-screen form of the work dir: never print the expanded home directory
 WD="${WORKDIR/#$HOME/\~}"
@@ -133,9 +137,27 @@ host_deps() {
 
 kvm_check() {
   [[ -e /dev/kvm ]] || die "/dev/kvm missing - enable virtualization in BIOS/UEFI"
-  [[ -r /dev/kvm && -w /dev/kvm ]] && { say "KVM available"; return; }
-  die "no access to /dev/kvm - add yourself to the kvm group and re-login:
+  [[ -r /dev/kvm && -w /dev/kvm ]] || die "no access to /dev/kvm - add yourself to the kvm group and re-login:
   sudo usermod -aG kvm $USER"
+  say "KVM available"
+}
+
+# host has to fit the VM's memory and ~15 GB of disk for image + zips + guest
+resource_check() {
+  if (( host_mem_gb < 6 )); then
+    warn "only ${host_mem_gb} GB RAM on this host; the VM gets $VM_MEM"
+    note "trying anyway - the compile is the tight part, and it may swap or"
+    note "run out of memory. If it dies: TWOW_VM_CPUS=2 $0 (fewer parallel"
+    note "compile jobs need less memory), or build on a bigger machine."
+  fi
+  local free_gb
+  free_gb=$(df -BG --output=avail "$WORKDIR" 2>/dev/null | tail -1 | tr -dc '0-9')
+  if [[ -n "$free_gb" ]] && (( free_gb < 15 )); then
+    warn "only ${free_gb} GB free in $WD - image, zips and the guest need about 15 GB"
+    ui_select "Continue anyway?" 1 "Yes, continue" "No, stop here"
+    (( ANSWER == 0 )) || die "free some space, or point elsewhere: TWOW_VM_DIR=/other/disk $0"
+  fi
+  say "host resources: $VM_CPUS cores and $VM_MEM for the VM"
 }
 
 # =============================================================================
@@ -447,6 +469,7 @@ main() {
   ui_intro "zero to world console"
   host_deps
   kvm_check
+  resource_check
   find_payload
   fetch_image
   make_seed
