@@ -24,6 +24,8 @@ SSH_PORT=2222 REALM_PORT=3724 WORLD_PORT=8091
 VM_CPUS=$(( $(nproc) < 8 ? $(nproc) : 8 ))
 VM_MEM=12G
 KIT_REPO=https://github.com/Xapne/twow-linux.git
+# on-screen form of the work dir: never print the expanded home directory
+WD="${WORKDIR/#$HOME/\~}"
 
 # --- looks: same palette and gutter language as setup-native.sh -------------
 C_RST=$'\033[0m' C_BOLD=$'\033[1m' C_DIM=$'\033[2m'
@@ -146,7 +148,7 @@ find_payload() {
       local guess=""
       for d in . "$HOME/Downloads" "$HOME"; do [[ -f "$d/$f" ]] && { guess="$d/$f"; break; }; done
       if [[ -n "$guess" ]]; then
-        ui_select "$f found at $guess - use it?" 0 "Yes, copy it into $WORKDIR" "No, I'll give a path"
+        ui_select "$f found at $guess - use it?" 0 "Yes, copy it into $WD" "No, I'll give a path"
         if (( ANSWER == 0 )); then cp --reflink=auto "$guess" "$WORKDIR/"; else
           ui_text "Path to $f" ""
           [[ -f "$ANSWER" ]] || die "$ANSWER does not exist"
@@ -195,7 +197,7 @@ EOF
 }
 
 make_disk() {
-  [[ -f "$WORKDIR/$DISK" ]] && { say "VM disk exists (delete $WORKDIR/$DISK for a clean rebuild)"; return; }
+  [[ -f "$WORKDIR/$DISK" ]] && { say "VM disk exists (delete $WD/$DISK for a clean rebuild)"; return; }
   say "creating $DISK_SIZE overlay disk on top of the stock image"
   qemu-img create -q -f qcow2 -b "$IMG" -F qcow2 "$WORKDIR/$DISK" "$DISK_SIZE"
   ( cd "$WORKDIR" && qemu-img rebase -u -b "$IMG" -F qcow2 "$DISK" 2>/dev/null || true )
@@ -218,7 +220,7 @@ boot_vm() {
     printf '\r%s  %s waiting for first boot %s' "$GUT" "${C_DIM}cloud-init runs once${C_RST}" "${spin:i%4:1}"
     sleep 3
   done
-  die "VM did not come up - check $WORKDIR/logs/serial.log"
+  die "VM did not come up - check $WD/logs/serial.log"
 }
 
 # =============================================================================
@@ -229,8 +231,8 @@ provision() {
     say "guest already provisioned"; return
   fi
   say "provisioning the guest (apt + Debian quirk fixes + the kit)"
-  note "full log: $WORKDIR/logs/provision.log"
-  vm "KIT_REPO='$KIT_REPO' bash -s" > "$WORKDIR/logs/provision.log" 2>&1 <<'GUEST' || die "provisioning failed, see $WORKDIR/logs/provision.log"
+  note "full log: $WD/logs/provision.log"
+  vm "KIT_REPO='$KIT_REPO' bash -s" > "$WORKDIR/logs/provision.log" 2>&1 <<'GUEST' || die "provisioning failed, see $WD/logs/provision.log"
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 sudo apt-get update -qq
@@ -389,7 +391,7 @@ status() {
     vm 'ss -tln | grep -q ":3724 "' 2>/dev/null && note "realmd: up (3724)" || note "realmd: down"
     vm "ss -tln | grep -q ':$WORLD_PORT '" 2>/dev/null && note "mangosd: up ($WORLD_PORT)" || note "mangosd: down"
   fi
-  ui_outro "work dir: $WORKDIR"
+  ui_outro "work dir: $WD"
 }
 
 destroy() {
@@ -419,7 +421,7 @@ ${C_BOLD}Modes:${C_RST}
   ${C_GREEN}help${C_RST}       this
 
 Bring ${C_BOLD}TurtleWoW_1.18.zip${C_RST} and ${C_BOLD}data.zip${C_RST}; everything else is automatic.
-Work dir: ${C_DIM}$WORKDIR${C_RST} (override with TWOW_VM_DIR=...)
+Work dir: ${C_DIM}$WD${C_RST} (override with TWOW_VM_DIR=...)
 
 EOF
 }
