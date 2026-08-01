@@ -77,6 +77,23 @@ find_mariadbd() {
   return 1
 }
 
+# mangosd renames its main thread ("MainThread" in /proc comm), so process
+# checks have to look at the command line, not the process name.
+world_running() { pgrep -f 'mangosd -c' >/dev/null 2>&1; }
+
+# Copy into place without ETXTBSY: write beside the target, then rename over
+# it. rename() only swaps the directory entry, so a running binary keeps its
+# old inode and the next start picks up the new one.
+install_binaries() {
+  local src
+  for src in "$@"; do
+    local dest="$SERVER/bin/${src##*/}"
+    cp -f "$src" "$dest.new" || die "could not stage ${src##*/} into server/bin/"
+    chmod +x "$dest.new"
+    mv -f "$dest.new" "$dest" || die "could not install ${src##*/} into server/bin/"
+  done
+}
+
 check_deps() {
   local -A pkg=(
     [gcc]=$PKG_BUILD [g++]=$PKG_BUILD [make]=$PKG_BUILD [cmake]=$PKG_BUILD
@@ -187,7 +204,7 @@ ensure_binaries() {
     || die "cmake configure failed, see $ROOT/build-configure.log"
   ninja -C "$ROOT/build" mangosd realmd \
     || die "compile failed. Scroll up for the first error; report it on the tortoise-wow GitHub."
-  cp "$ROOT/build/src/mangosd/mangosd" "$ROOT/build/src/realmd/realmd" "$SERVER/bin/"
+  install_binaries "$ROOT/build/src/mangosd/mangosd" "$ROOT/build/src/realmd/realmd"
   say "installed native mangosd and realmd"
 }
 
@@ -542,12 +559,15 @@ interactive_config() {
 update_all() {
   [[ -d "$ROOT/src/.git" ]] || die "no source checkout in src/; run: $0 setup"
   [[ -x "$SERVER/bin/mangosd" ]] || die "not converted yet; run: $0 setup"
-  if pgrep -x mangosd >/dev/null 2>&1; then
-    die "the world server is running; stop it first (Ctrl+C in its console).
-  Swapping binaries and schema under a live server is how characters get eaten."
+  # mangosd renames its main thread, so its /proc comm is "MainThread" and
+  # pgrep -x never matches it; match the command line instead.
+  if world_running; then
+    die "the world server is running; stop it first.
+  In its console: Ctrl+C. Detached: pkill -INT -f 'mangosd -c'
+  Swapping schema under a live server is how characters get eaten."
   fi
-  if pgrep -x realmd >/dev/null 2>&1; then
-    pkill -INT -x realmd; sleep 1
+  if pgrep -f 'realmd -c' >/dev/null 2>&1; then
+    pkill -INT -f 'realmd -c'; sleep 1
     say "stopped realmd (a running binary cannot be replaced)"
   fi
 
@@ -574,7 +594,7 @@ update_all() {
   ninja -C "$ROOT/build" mangosd realmd \
     || die "compile failed; the installed binaries were not touched.
   Fix the error above or report it on the tortoise-wow GitHub."
-  cp "$ROOT/build/src/mangosd/mangosd" "$ROOT/build/src/realmd/realmd" "$SERVER/bin/"
+  install_binaries "$ROOT/build/src/mangosd/mangosd" "$ROOT/build/src/realmd/realmd"
   say "installed updated binaries into server/bin/"
 
   start_native_db
