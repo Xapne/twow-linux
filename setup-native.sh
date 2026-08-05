@@ -40,7 +40,7 @@ detect_distro() {
   case " $id " in
     *" debian "*|*" ubuntu "*)
       INSTALL="sudo apt install -y"
-      PKG_BUILD="build-essential"; PKG_NINJA="ninja-build"; PKG_TAR="libarchive-tools"
+      PKG_BUILD="build-essential cmake"; PKG_NINJA="ninja-build"; PKG_TAR="libarchive-tools"
       PKG_DB="mariadb-server mariadb-client"; PKG_WINE="wine"
       PKG_DEV="default-libmysqlclient-dev libssl-dev zlib1g-dev";;
     *" fedora "*|*" rhel "*|*" centos "*)
@@ -689,7 +689,7 @@ case "$mode" in
     if [[ "$mode" == all ]]; then run_all "${@:2}"; fi
     ;;
   run) check_deps; run_all "${@:2}" ;;
-  interactive) ensure_repack; interactive_config ;;
+  interactive) check_deps; ensure_repack; interactive_config ;;
   update) check_deps; update_all ;;
   help|-h|--help) usage ;;
   *) warn "unknown mode '$mode'"; usage; exit 1 ;;
