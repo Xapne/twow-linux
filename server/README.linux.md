@@ -1,10 +1,11 @@
-# TurtleWoW 1.18.1 server on Arch Linux (native)
+# TurtleWoW 1.18.1 server on Linux (native)
 
 Everything server-side runs natively. No Wine in the server stack.
 
 - `bin/realmd`, `bin/mangosd`: native Linux builds of Penqle's tortoise-wow,
-  branch 1181dev, compiled from `../src` into `../build` (links ACE from
-  `../deps/ACE_wrappers`).
+  branch 1181dev, compiled from `../src` into `../build`. ACE is taken from the
+  distribution where a recent enough version is packaged, and otherwise built
+  into `../deps/ACE_wrappers`.
 - Database: system MariaDB binary with a project-local data directory in
   `db/`, config in `my.cnf` (127.0.0.1, root/mangos). The port is normally 3306;
   the next free one is used when a distro MariaDB service already holds it, and
@@ -12,14 +13,16 @@ Everything server-side runs natively. No Wine in the server stack.
   file is part of the install and should not be deleted: without it a stopped
   database may be brought back on a different port.
 - The Windows leftovers (`*.bat`, `bin/*.exe`, `bin/*.dll`,
-  `mariadb-10.3.39-winx64/`) are unused now. The old Windows MariaDB data dir
-  still holds the original DB snapshot, so keep it until you have backups.
-- The game client stays under Wine: run `WoW.exe` in `../client`
-  (realmlist already points at 127.0.0.1). Never run TurtleWoW.exe.
+  `mariadb-10.3.39-winx64/`) are unused. The original database snapshot is still
+  held in the old Windows MariaDB data directory, which should be retained until
+  backups exist.
+- The game client stays under Wine: `WoW.exe` in `../client` is the entry point,
+  with realmlist already pointing at 127.0.0.1. TurtleWoW.exe must not be
+  started; it patches the client and requires WebView2.
 
 ## Start order (every session)
 
-Three terminals, in this order, wait for each to be ready:
+Three terminals, in this order, each started once the previous one is ready:
 
 1. `./1-start-mysql.sh`   - ready at "ready for connections"
 2. `./2-realm-server.sh`  - ready at "Login server is up and running"
@@ -30,7 +33,7 @@ Three terminals, in this order, wait for each to be ready:
    works on `setup-native.sh run [loglevel]`. Log files keep their own
    detail via LogFileLevel.
 
-Login: admin / admin (see README.txt, change it).
+Login: admin / admin (see README.txt; the password is meant to be replaced).
 
 ## Stopping the world
 
@@ -43,25 +46,27 @@ before the world is stopped for maintenance, and removed afterwards.
 
 ## Other scripts
 
-- `./import-world-db.sh`: drop + re-import turtle_world from
-  turtle_world.sql. Only for updates. ALWAYS follow with apply-db-updates.sh.
-- `./apply-db-updates.sh`: apply world migrations from `../src` that the DB
-  does not have yet. Run after an import and after every git pull + rebuild.
-- `./clear-logs.sh`: empty the logs/ folder.
+- `./import-world-db.sh`: drops and re-imports turtle_world from
+  turtle_world.sql. Only for updates, and always followed by
+  `apply-db-updates.sh`.
+- `./apply-db-updates.sh`: applies world migrations from `../src` that the
+  database does not have yet. Required after an import, and after every git pull
+  and rebuild.
+- `./clear-logs.sh`: empties the logs/ folder.
 
 ## Updating
 
-1. Stop the world server (see above); `setup-native.sh update` refuses while it runs
+1. Stop the world server (see above); `setup-native.sh update` refuses while it is running
 2. `cd ../src && git pull`
 3. `ninja -C ../build mangosd realmd` and copy the two binaries into `bin/`
 4. `./apply-db-updates.sh` (with MySQL running)
 
 ## Notes
 
-- mangosd expects its console on stdin; run it in a real terminal. With
-  stdin closed (background/service) it shuts down right after startup. For a
-  systemd unit, set Console.Enable = 0 in bin/mangosd.conf instead.
-- Ports: MySQL per `db.env` (3306 unless taken), 3724 realmd (auth),
-  8091 mangosd (world). All bound to
-  127.0.0.1. For LAN play see Section 14 of the setup guide (BindIP,
-  HostAddressOverride in bin/realmd.conf, and the realmlist table address).
+- mangosd expects its console on stdin and therefore requires a real terminal.
+  With stdin closed (background or service) it shuts down right after startup;
+  for a systemd unit, Console.Enable = 0 is set in bin/mangosd.conf instead.
+- Ports: MySQL per `db.env` (3306 unless taken), 3724 realmd (auth), 8091
+  mangosd (world), all bound to 127.0.0.1. LAN play is covered in Section 14 of
+  the setup guide (BindIP, HostAddressOverride in bin/realmd.conf, and the
+  realmlist table address).
