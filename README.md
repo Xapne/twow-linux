@@ -102,6 +102,7 @@ that is cosmetic.
 
 - SIGGZ (send me a link) for the repack, [Penqle](https://github.com/Penqle/) for the 1181dev source
 - [Kes](https://ko-fi.com/scribblesbykes) (NoGuiltGaming) for the Windows setup guide this follows
+- Ramach for battle-testing the setup on Debian
 - The TurtleWoW preservation [Discord](https://discord.gg/kpnCR644kk)
 
 ## Donations
