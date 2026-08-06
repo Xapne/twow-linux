@@ -5,9 +5,19 @@
 # with rows already present in the imported dump.
 # Run this after import-world-db.sh, and after every git pull + rebuild.
 set -euo pipefail
-cd "$(dirname "$(readlink -f "$0")")/../src/sql/database_updates"
+HERE="$(dirname "$(readlink -f "$0")")"
+cd "$HERE/../src/sql/database_updates"
 
-DB() { mariadb -h 127.0.0.1 -P 3306 -u root -pmangos --max-allowed-packet=128M "$@"; }
+# db.env carries the port setup-native.sh settled on, which is not 3306 when a
+# system MariaDB already holds that one.
+# shellcheck source=/dev/null
+[ -f "$HERE/db.env" ] && . "$HERE/db.env"
+TWOW_DB_HOST=${TWOW_DB_HOST:-127.0.0.1}
+TWOW_DB_PORT=${TWOW_DB_PORT:-3306}
+TWOW_DB_USER=${TWOW_DB_USER:-root}
+TWOW_DB_PASS=${TWOW_DB_PASS:-mangos}
+
+DB() { mariadb -h "$TWOW_DB_HOST" -P "$TWOW_DB_PORT" -u "$TWOW_DB_USER" -p"$TWOW_DB_PASS" --max-allowed-packet=128M "$@"; }
 
 last=$(DB -N -e "SELECT Name FROM turtle_world.migrations WHERE Name REGEXP '^[0-9]{14}_world$' ORDER BY Name DESC LIMIT 1")
 last="${last%_world}"

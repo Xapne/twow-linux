@@ -17,7 +17,16 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVER="$ROOT/server"
-DB_HOST=127.0.0.1 DB_PORT=3306 DB_USER=root DB_PASS=mangos
+# The TWOW_ prefix avoids collision with a bare DB_HOST/DB_PORT/DB_USER already
+# present in the environment. db.env is written in ${VAR:-default} form so
+# environment values take precedence over it; an empty port is resolved below.
+# shellcheck source=/dev/null
+[[ -f "$SERVER/db.env" ]] && . "$SERVER/db.env"
+TWOW_DB_HOST=${TWOW_DB_HOST:-127.0.0.1}
+TWOW_DB_PORT=${TWOW_DB_PORT:-}
+TWOW_DB_USER=${TWOW_DB_USER:-root}
+TWOW_DB_PASS=${TWOW_DB_PASS:-mangos}
+export TWOW_DB_HOST TWOW_DB_PORT TWOW_DB_USER TWOW_DB_PASS
 ACE_VER=8.0.3
 BRANCH=1181dev
 REPO=https://github.com/Penqle/tortoise-wow.git
@@ -26,7 +35,7 @@ say()  { printf '\033[1;32m[setup]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
 
-DB() { mariadb -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" --max-allowed-packet=128M "$@"; }
+DB() { mariadb -h "$TWOW_DB_HOST" -P "$TWOW_DB_PORT" -u "$TWOW_DB_USER" -p"$TWOW_DB_PASS" --max-allowed-packet=128M "$@"; }
 
 # -----------------------------------------------------------------------------
 # dependencies, with the exact package to install when one is missing
@@ -217,9 +226,17 @@ fix_configs() {
     [[ -f "$f" ]] || die "$f is missing. The repack should provide it;
   re-extract TurtleWoW_1.18.zip or restore the file from it."
   done
-  sed -i 's|LoginDatabaseInfo = "localhost;|LoginDatabaseInfo = "127.0.0.1;|' "$SERVER/bin/realmd.conf"
+  resolve_db_port
+  # The repack points these at localhost:3306. "localhost" makes the client
+  # library use the distro's default socket path instead of ours, and 3306 is
+  # not necessarily where we ended up, so rewrite host and port on every
+  # connection string while leaving the user, password and database alone.
+  for f in "$SERVER/bin/realmd.conf" "$SERVER/bin/mangosd.conf"; do
+    sed -i -E "s@^([[:space:]]*(Login|World|Character|Logs)DatabaseInfo[[:space:]]*=[[:space:]]*\")[^;\"]*;[^;\"]*;@\1$TWOW_DB_HOST;$TWOW_DB_PORT;@" "$f"
+  done
   sed -i 's|^DataDir = "\.\./Data"|DataDir = "../data"|' "$SERVER/bin/mangosd.conf"
-  say "configs checked (realmd 127.0.0.1, DataDir lowercase)"
+  write_db_env
+  say "configs checked (database $TWOW_DB_HOST:$TWOW_DB_PORT, DataDir lowercase)"
 }
 
 # -----------------------------------------------------------------------------
@@ -243,40 +260,121 @@ fix_client() {
 # -----------------------------------------------------------------------------
 # native database in server/db, seeded from the bundled Windows one
 # -----------------------------------------------------------------------------
-mariadb_running() { mariadb --socket="$SERVER/db/mysql.sock" -u root -p"$DB_PASS" -e "SELECT 1" >/dev/null 2>&1; }
+# The project's instance always answers on its own socket, whatever port it got.
+# ping is used rather than a query because it reports the daemon as alive even
+# when the credentials are refused; a password problem would otherwise look
+# like "not running" and be reported as a port clash further down.
+mariadb_running() { mariadb-admin --socket="$SERVER/db/mysql.sock" -u "$TWOW_DB_USER" -p"$TWOW_DB_PASS" ping >/dev/null 2>&1; }
+
+port_free() {
+  if command -v ss >/dev/null 2>&1; then
+    ! ss -tln 2>/dev/null | grep -q "[:.]$1 "
+  else
+    ! (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null
+  fi
+}
+
+# On Debian and Ubuntu the packaged mariadb is started on 3306 as soon as it is
+# installed, so that port is frequently unavailable; a free one is picked
+# instead of requiring the system service to be disabled. 3307 is reserved for
+# the wine seeding instance further down.
+resolve_db_port() {
+  [[ -n "$TWOW_DB_PORT" ]] && return 0
+  local p
+  if p=$(mariadb --socket="$SERVER/db/mysql.sock" -u "$TWOW_DB_USER" -p"$TWOW_DB_PASS" \
+           -N -B -e "SELECT @@port" 2>/dev/null) && [[ -n "$p" ]]; then
+    TWOW_DB_PORT="$p"; return 0            # already running: keep the port it has
+  fi
+  for p in 3306 3308 3309 3310 3311 3312; do
+    port_free "$p" || continue
+    TWOW_DB_PORT="$p"
+    [[ "$p" == 3306 ]] || warn "port 3306 is in use by something else (a system mariadb/mysql service?);
+  using port $p for this server's own database instead"
+    return 0
+  done
+  die "no free port for the database between 3306 and 3312.
+  Pick one yourself with: TWOW_DB_PORT=<port> $0 ${mode:-setup}"
+}
+
+write_db_env() {
+  cat > "$SERVER/db.env" <<EOF
+# Written by setup-native.sh and read by the helper scripts in this folder so
+# they reach the same database. Safe to edit; the environment still wins.
+TWOW_DB_HOST=\${TWOW_DB_HOST:-$TWOW_DB_HOST}
+TWOW_DB_PORT=\${TWOW_DB_PORT:-$TWOW_DB_PORT}
+TWOW_DB_USER=\${TWOW_DB_USER:-$TWOW_DB_USER}
+TWOW_DB_PASS=\${TWOW_DB_PASS:-$TWOW_DB_PASS}
+EOF
+}
+
+# my.cnf is the user's to tune, so it is created once and thereafter only the
+# port and the run-as user are kept in sync.
+sync_my_cnf() {
+  local f="$SERVER/my.cnf"
+  # mariadbd aborts when invoked by root unless it is explicitly told to run as
+  # root ("Please consult the Knowledge Base to find out how to run mysqld as
+  # root!" in mysql.out); server/db is owned by root in that case anyway.
+  local run_as=""; [[ $EUID -eq 0 ]] && run_as=$'user = root\n'
+  if [[ ! -f "$f" ]]; then
+    cat > "$f" <<EOF
+[mysqld]
+datadir = $SERVER/db
+socket  = $SERVER/db/mysql.sock
+bind-address = 127.0.0.1
+port = $TWOW_DB_PORT
+${run_as}max_allowed_packet = 128M
+innodb_flush_log_at_trx_commit = 2
+innodb_buffer_pool_size = 512M
+
+[client]
+socket = $SERVER/db/mysql.sock
+port = $TWOW_DB_PORT
+max_allowed_packet = 128M
+EOF
+    return
+  fi
+  if grep -qE '^[[:space:]]*port[[:space:]]*=' "$f"; then
+    sed -i -E "s@^([[:space:]]*port[[:space:]]*=).*@\1 $TWOW_DB_PORT@" "$f"
+  else
+    sed -i "0,/^\[mysqld\]/s@@[mysqld]\nport = $TWOW_DB_PORT@" "$f"
+  fi
+  if [[ -n "$run_as" ]] && ! grep -qE '^[[:space:]]*user[[:space:]]*=' "$f"; then
+    sed -i "0,/^\[mysqld\]/s@@[mysqld]\nuser = root@" "$f"
+  fi
+}
 
 start_native_db() {
-  mariadb_running && return
-  ss -tln | grep -q ":$DB_PORT " && die "port $DB_PORT is in use by something that is not our database.
-  Stop it first (is a system mysqld/mariadbd service running?)."
-  say "starting native MariaDB"
+  mkdir -p "$SERVER/logs"
+  if mariadb_running; then
+    mariadb --socket="$SERVER/db/mysql.sock" -u "$TWOW_DB_USER" -p"$TWOW_DB_PASS" \
+        -e "SELECT 1" >/dev/null 2>&1 \
+      || die "the database in server/db is running but rejects $TWOW_DB_USER's password.
+  Pass the right one as TWOW_DB_PASS=..., or shut it down and let this script start it:
+  mariadb-admin --socket=$SERVER/db/mysql.sock -u $TWOW_DB_USER -p<password> shutdown"
+    resolve_db_port
+    return
+  fi
+  resolve_db_port
+  sync_my_cnf
+  port_free "$TWOW_DB_PORT" || die "port $TWOW_DB_PORT is in use by something that is not our database.
+  Stop it, or run this on another port: TWOW_DB_PORT=<port> $0 ${mode:-setup}"
+  say "starting native MariaDB on port $TWOW_DB_PORT"
   # distros disagree on where the daemon lives (/usr/bin on Arch, /usr/sbin on
   # Debian, /usr/libexec on Fedora); ask the shell instead of guessing
   local mariadbd; mariadbd=$(find_mariadbd) \
     || die "no mariadbd/mysqld found; install $PKG_DB"
   nohup "$mariadbd" --defaults-file="$SERVER/my.cnf" > "$SERVER/logs/mysql.out" 2>&1 &
   local i; for i in $(seq 1 30); do [[ -S "$SERVER/db/mysql.sock" ]] && break; sleep 1; done
-  [[ -S "$SERVER/db/mysql.sock" ]] || die "MariaDB did not come up, see $SERVER/logs/mysql.out"
+  [[ -S "$SERVER/db/mysql.sock" ]] || die "MariaDB did not come up. Last lines of ${SERVER#"$ROOT"/}/logs/mysql.out:
+
+$(tail -n 15 "$SERVER/logs/mysql.out" 2>/dev/null | sed 's/^/  /')"
+  write_db_env
 }
 
 ensure_database() {
   mkdir -p "$SERVER/logs"
-  if [[ ! -f "$SERVER/my.cnf" ]]; then
-    cat > "$SERVER/my.cnf" <<EOF
-[mysqld]
-datadir = $SERVER/db
-socket  = $SERVER/db/mysql.sock
-bind-address = 127.0.0.1
-port = $DB_PORT
-max_allowed_packet = 128M
-innodb_flush_log_at_trx_commit = 2
-innodb_buffer_pool_size = 512M
-
-[client]
-socket = $SERVER/db/mysql.sock
-max_allowed_packet = 128M
-EOF
-  fi
+  resolve_db_port
+  sync_my_cnf
   if [[ ! -d "$SERVER/db/mysql" ]]; then
     say "initializing native MariaDB data dir in server/db"
     mariadb-install-db --no-defaults --datadir="$SERVER/db" \
@@ -284,8 +382,8 @@ EOF
       || die "mariadb-install-db failed, see $SERVER/logs/mysql-install.log"
     start_native_db
     mariadb --socket="$SERVER/db/mysql.sock" -u root -e "
-      ALTER USER 'root'@'localhost' IDENTIFIED BY '$DB_PASS';
-      CREATE USER IF NOT EXISTS 'root'@'127.0.0.1' IDENTIFIED BY '$DB_PASS';
+      ALTER USER 'root'@'localhost' IDENTIFIED BY '$TWOW_DB_PASS';
+      CREATE USER IF NOT EXISTS 'root'@'127.0.0.1' IDENTIFIED BY '$TWOW_DB_PASS';
       GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' WITH GRANT OPTION;
       FLUSH PRIVILEGES;" || die "could not set the root password"
   else
@@ -300,7 +398,7 @@ EOF
   # One-time only; needs wine. Runs on port 3307 so it cannot clash.
   command -v wine >/dev/null 2>&1 \
     || die "game databases are empty and seeding them needs wine once ($INSTALL $PKG_WINE).
-  Alternative: import dumps you already have into $DB_HOST:$DB_PORT."
+  Alternative: import dumps you already have into $TWOW_DB_HOST:$TWOW_DB_PORT."
   local windb="$SERVER/mariadb-10.3.39-winx64"
   [[ -d "$windb/data/turtle_logon" ]] \
     || die "bundled Windows MariaDB data not found in $windb; cannot seed the databases."
@@ -308,15 +406,15 @@ EOF
   ( cd "$windb/bin" && nohup wine mysqld.exe --console --port=3307 \
       > "$SERVER/logs/wine-mysql.out" 2>&1 & )
   local i; for i in $(seq 1 60); do
-    mariadb -h 127.0.0.1 -P 3307 -u root -p"$DB_PASS" --skip-ssl -e "SELECT 1" >/dev/null 2>&1 && break
+    mariadb -h 127.0.0.1 -P 3307 -u root -p"$TWOW_DB_PASS" --skip-ssl -e "SELECT 1" >/dev/null 2>&1 && break
     sleep 2
   done
-  mariadb -h 127.0.0.1 -P 3307 -u root -p"$DB_PASS" --skip-ssl -e "SELECT 1" >/dev/null 2>&1 \
+  mariadb -h 127.0.0.1 -P 3307 -u root -p"$TWOW_DB_PASS" --skip-ssl -e "SELECT 1" >/dev/null 2>&1 \
     || die "wine MariaDB did not come up, see $SERVER/logs/wine-mysql.out"
-  mariadb-dump -h 127.0.0.1 -P 3307 -u root -p"$DB_PASS" --skip-ssl --routines --triggers \
+  mariadb-dump -h 127.0.0.1 -P 3307 -u root -p"$TWOW_DB_PASS" --skip-ssl --routines --triggers \
     --databases turtle_logon turtle_char turtle_logs turtle_world > "$SERVER/logs/seed-dump.sql" \
     || die "dumping from the wine MariaDB failed"
-  mariadb-admin -h 127.0.0.1 -P 3307 -u root -p"$DB_PASS" --skip-ssl shutdown || true
+  mariadb-admin -h 127.0.0.1 -P 3307 -u root -p"$TWOW_DB_PASS" --skip-ssl shutdown || true
   say "importing the seed dump into native MariaDB"
   DB < "$SERVER/logs/seed-dump.sql" || die "import of the seed dump failed"
 }
@@ -601,7 +699,7 @@ update_all() {
   mkdir -p "$SERVER/backups"
   local backup="$SERVER/backups/turtle_world-$(date +%Y%m%d-%H%M%S)-$after.sql.gz"
   say "backing up turtle_world before migrations"
-  mariadb-dump -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" \
+  mariadb-dump -h "$TWOW_DB_HOST" -P "$TWOW_DB_PORT" -u "$TWOW_DB_USER" -p"$TWOW_DB_PASS" \
       --routines --triggers turtle_world | gzip > "$backup" \
     || die "backup failed; not touching the database"
   say "backup: ${backup#"$ROOT"/}"
@@ -616,7 +714,7 @@ update_all() {
 run_all() {
   [[ -x "$SERVER/bin/mangosd" ]] || die "no native binaries yet; run: $0 setup"
   start_native_db
-  say "MariaDB ready on $DB_HOST:$DB_PORT"
+  say "MariaDB ready on $TWOW_DB_HOST:$TWOW_DB_PORT"
 
   if ! ss -tln | grep -q ':3724 '; then
     ( cd "$SERVER/bin" && nohup ./realmd -c realmd.conf > "$SERVER/logs/realmd.out" 2>&1 & )
@@ -628,7 +726,7 @@ run_all() {
   say "starting mangosd in the foreground; this terminal is the server console"
   say "first boot loads all maps and takes a few minutes; stop with Ctrl+C"
   trap 'warn "world server stopped; realmd and MariaDB are still running.
-  Stop them with: pkill -INT -f \"realmd -c\"; mariadb-admin -h 127.0.0.1 -u root -pmangos shutdown"' EXIT
+  Stop them with: pkill -INT -f \"realmd -c\"; mariadb-admin --socket=$SERVER/db/mysql.sock -u $TWOW_DB_USER -p$TWOW_DB_PASS shutdown"' EXIT
   [[ -x "$SERVER/3-world-server.sh" ]] \
     || die "$SERVER/3-world-server.sh is missing or not executable;
   restore it (chmod +x) or start manually: cd $SERVER/bin && ./mangosd -c mangosd.conf"

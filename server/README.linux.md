@@ -6,7 +6,10 @@ Everything server-side runs natively. No Wine in the server stack.
   branch 1181dev, compiled from `../src` into `../build` (links ACE from
   `../deps/ACE_wrappers`).
 - Database: system MariaDB binary with a project-local data directory in
-  `db/`, config in `my.cnf` (127.0.0.1:3306, root/mangos).
+  `db/`, config in `my.cnf` (127.0.0.1, root/mangos). The port is normally
+  3306, but setup-native.sh moves to the next free one when a distro MariaDB
+  service already holds it; the value in use is recorded in `db.env`, which
+  the scripts here read.
 - The Windows leftovers (`*.bat`, `bin/*.exe`, `bin/*.dll`,
   `mariadb-10.3.39-winx64/`) are unused now. The old Windows MariaDB data dir
   still holds the original DB snapshot, so keep it until you have backups.
@@ -47,6 +50,7 @@ Login: admin / admin (see README.txt, change it).
 - mangosd expects its console on stdin; run it in a real terminal. With
   stdin closed (background/service) it shuts down right after startup. For a
   systemd unit, set Console.Enable = 0 in bin/mangosd.conf instead.
-- Ports: 3306 MySQL, 3724 realmd (auth), 8091 mangosd (world). All bound to
+- Ports: MySQL per `db.env` (3306 unless taken), 3724 realmd (auth),
+  8091 mangosd (world). All bound to
   127.0.0.1. For LAN play see Section 14 of the setup guide (BindIP,
   HostAddressOverride in bin/realmd.conf, and the realmlist table address).
