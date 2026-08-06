@@ -6,10 +6,9 @@ Everything server-side runs natively. No Wine in the server stack.
   branch 1181dev, compiled from `../src` into `../build` (links ACE from
   `../deps/ACE_wrappers`).
 - Database: system MariaDB binary with a project-local data directory in
-  `db/`, config in `my.cnf` (127.0.0.1, root/mangos). The port is normally
-  3306, but setup-native.sh moves to the next free one when a distro MariaDB
-  service already holds it; the value in use is recorded in `db.env`, which
-  the scripts here read.
+  `db/`, config in `my.cnf` (127.0.0.1, root/mangos). The port is normally 3306;
+  the next free one is used when a distro MariaDB service already holds it, and
+  the value in use is recorded in `db.env`, which the scripts here read.
 - The Windows leftovers (`*.bat`, `bin/*.exe`, `bin/*.dll`,
   `mariadb-10.3.39-winx64/`) are unused now. The old Windows MariaDB data dir
   still holds the original DB snapshot, so keep it until you have backups.
@@ -31,6 +30,15 @@ Three terminals, in this order, wait for each to be ready:
 
 Login: admin / admin (see README.txt, change it).
 
+## Stopping the world
+
+Ctrl+C in the console, or `pkill -TERM -f 'mangosd -c'` when detached. SIGINT is
+the core's restart signal; with `pkill -INT` the world is only restarted.
+
+The world is restarted automatically after a crash or a scheduled restart. That
+is suspended while `restart.paused` exists in this folder, so the file is created
+before the world is stopped for maintenance, and removed afterwards.
+
 ## Other scripts
 
 - `./import-world-db.sh`: drop + re-import turtle_world from
@@ -41,9 +49,10 @@ Login: admin / admin (see README.txt, change it).
 
 ## Updating
 
-1. `cd ../src && git pull`
-2. `ninja -C ../build mangosd realmd` and copy the two binaries into `bin/`
-3. `./apply-db-updates.sh` (with MySQL running)
+1. Stop the world server (see above); `setup-native.sh update` refuses while it runs
+2. `cd ../src && git pull`
+3. `ninja -C ../build mangosd realmd` and copy the two binaries into `bin/`
+4. `./apply-db-updates.sh` (with MySQL running)
 
 ## Notes
 

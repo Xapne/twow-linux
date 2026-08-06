@@ -28,17 +28,34 @@ if [[ $# -ge 1 ]]; then
   esac
 fi
 
-# Loop like the Windows restarter bat. The core exits 2 when it schedules
-# its own restart (AutoRestart, honor calculations); 0 is a clean stop
-# (Ctrl+C in the console); anything else is a crash.
+# Restart loop on the core's exit codes (ShutdownExitCode in src/game/World.h):
+# 0 shutdown, 1 error, 2 restart. SIGINT is mapped by mangosd to 2 and SIGTERM
+# to 0, so a deliberate stop cannot be told from a scheduled restart by exit
+# code alone and is recorded here instead.
+stop=0
+trap 'stop=1' INT TERM
+
+# Auto-restart is suspended while this file exists: the world is stopped as
+# usual and then left down until the file is removed.
+PAUSE="$(dirname "$(readlink -f "$0")")/restart.paused"
+
+# True when the world must not be restarted; the reason is printed.
+halt() {
+  ((stop))          && { echo "stopped on request; not restarting"; return 0; }
+  [[ -e "$PAUSE" ]] && { echo "auto-restart paused (${PAUSE##*/} exists); leaving the world stopped"; return 0; }
+  return 1
+}
+
 while :; do
   set +e
   ./mangosd -c mangosd.conf
   code=$?
   set -e
+  halt && exit 0
   case $code in
     0) echo "world server stopped cleanly"; exit 0;;
     2) echo "scheduled restart - bringing the world back"; sleep 2;;
     *) echo "mangosd exited with code $code - back in 5s (Ctrl+C now to stop for good)"; sleep 5;;
   esac
+  halt && exit 0        # checked again: a signal may arrive during the wait
 done

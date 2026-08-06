@@ -260,7 +260,7 @@ fix_client() {
 # -----------------------------------------------------------------------------
 # native database in server/db, seeded from the bundled Windows one
 # -----------------------------------------------------------------------------
-# The project's instance always answers on its own socket, whatever port it got.
+# The project's instance is always reachable on its own socket, whatever the port.
 # ping is used rather than a query because it reports the daemon as alive even
 # when the credentials are refused; a password problem would otherwise look
 # like "not running" and be reported as a port clash further down.
@@ -661,7 +661,8 @@ update_all() {
   # pgrep -x never matches it; match the command line instead.
   if world_running; then
     die "the world server is running; stop it first.
-  In its console: Ctrl+C. Detached: pkill -INT -f 'mangosd -c'
+  In its console: Ctrl+C. Detached: pkill -TERM -f 'mangosd -c'
+  SIGINT is the core's restart signal; with pkill -INT the world is only restarted.
   Swapping schema under a live server is how characters get eaten."
   fi
   if pgrep -f 'realmd -c' >/dev/null 2>&1; then
