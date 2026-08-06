@@ -8,7 +8,9 @@ Everything server-side runs natively. No Wine in the server stack.
 - Database: system MariaDB binary with a project-local data directory in
   `db/`, config in `my.cnf` (127.0.0.1, root/mangos). The port is normally 3306;
   the next free one is used when a distro MariaDB service already holds it, and
-  the value in use is recorded in `db.env`, which the scripts here read.
+  the value in use is recorded in `db.env`, which the scripts here read. That
+  file is part of the install and should not be deleted: without it a stopped
+  database may be brought back on a different port.
 - The Windows leftovers (`*.bat`, `bin/*.exe`, `bin/*.dll`,
   `mariadb-10.3.39-winx64/`) are unused now. The old Windows MariaDB data dir
   still holds the original DB snapshot, so keep it until you have backups.
