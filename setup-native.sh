@@ -180,10 +180,43 @@ ensure_source() {
 }
 
 # -----------------------------------------------------------------------------
-# ACE library (rarely packaged; built locally)
+# ACE library: the distribution's when it is recent enough, otherwise built here
 # -----------------------------------------------------------------------------
+# Only Debian packages a usable version (13 ships 8.0.2); Fedora, openSUSE and
+# Arch package none at all, and Ubuntu 24.04 is on 7.1.2, a major version below
+# what the core is built against.
+ACE_MIN_MAJOR=8
+ACE_FROM=""
+
+# Both the headers and the link library have to be present, or find_package(ACE)
+# would fail after the local build had already been skipped. The linker is asked
+# directly, since the library sits in a multiarch or lib64 directory depending
+# on the distribution, and an absolute path is only returned when it exists.
+system_ace() {
+  local h=/usr/include/ace/Version.h v
+  [[ -f "$h" ]] || return 1
+  [[ "$(gcc -print-file-name=libACE.so 2>/dev/null)" == /* ]] || return 1
+  v=$(sed -n 's/^#define ACE_VERSION[[:space:]]*"\([^"]*\)".*/\1/p' "$h")
+  [[ -n "$v" && "${v%%.*}" -ge "$ACE_MIN_MAJOR" ]] || return 1
+  echo "$v"
+}
+
+# ACE_ROOT is left unset for a packaged ACE, which is where FindACE.cmake finds
+# it under /usr; otherwise it points at the tree built below.
+select_ace() {
+  local v
+  if v=$(system_ace); then
+    unset ACE_ROOT
+    ACE_FROM="the distribution's ACE $v"
+  else
+    export ACE_ROOT="$ROOT/deps/ACE_wrappers"
+    ACE_FROM=""
+  fi
+}
+
 ensure_ace() {
-  export ACE_ROOT="$ROOT/deps/ACE_wrappers"
+  select_ace
+  [[ -n "$ACE_FROM" ]] && { say "using $ACE_FROM"; return; }
   if [[ -f "$ACE_ROOT/lib/libACE.so" ]]; then say "ACE already built"; return; fi
   say "downloading and building ACE $ACE_VER (a few minutes)"
   mkdir -p "$ROOT/deps"; cd "$ROOT/deps"
@@ -208,7 +241,7 @@ ensure_binaries() {
     say "native binaries already in server/bin/"; return
   fi
   say "configuring and compiling the server (10-20 min on first run)"
-  ACE_ROOT="$ROOT/deps/ACE_wrappers" cmake -B "$ROOT/build" -S "$ROOT/src" -GNinja \
+  cmake -B "$ROOT/build" -S "$ROOT/src" -GNinja \
     -DCMAKE_BUILD_TYPE=Release -DDEBUG_SYMBOLS=OFF > "$ROOT/build-configure.log" 2>&1 \
     || die "cmake configure failed, see $ROOT/build-configure.log"
   ninja -C "$ROOT/build" mangosd realmd \
@@ -684,8 +717,8 @@ update_all() {
 
   say "rebuilding mangosd and realmd (incremental, only what changed)"
   # ninja re-runs cmake itself when the source's build files changed, and that
-  # re-run needs ACE_ROOT in the environment just like the first configure
-  export ACE_ROOT="$ROOT/deps/ACE_wrappers"
+  # re-run needs the same ACE in the environment as the first configure
+  select_ace
   [[ -f "$ROOT/build/build.ninja" ]] \
     || cmake -B "$ROOT/build" -S "$ROOT/src" -GNinja \
          -DCMAKE_BUILD_TYPE=Release -DDEBUG_SYMBOLS=OFF > "$ROOT/build-configure.log" 2>&1 \
