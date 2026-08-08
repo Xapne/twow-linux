@@ -196,8 +196,20 @@ make_disk() {
 boot_vm() {
   vm_register   # also marks work dirs that predate the marker
   if vm_up; then say "VM already running"; return; fi
+  # A port held by this work dir's own qemu is not a conflict. The VM can be
+  # up while ssh is still starting, and refusing there would report our own
+  # forwards as a stranger. Whatever else holds one is named: "something else
+  # is running there" leaves the reader hunting for a process it will not name.
+  local own holder what
+  own=$(vm_pid_in "$WORKDIR")
   for p in "$SSH_PORT" "$REALM_PORT" "$WORLD_PORT"; do
-    ss -tln | grep -q ":$p " && die "port $p is already in use on this host - something else is running there"
+    ss -tln | grep -q ":$p " || continue
+    holder=$( { ss -tlnp 2>/dev/null || true; } | grep ":$p " | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2)
+    [[ -n "$own" && "$holder" == "$own" ]] && continue
+    what=""
+    [[ -n "$holder" ]] && what=" by $(ps -o comm= -p "$holder" 2>/dev/null || echo process) (pid $holder)"
+    die "port $p on this host is already held$what.
+  Stop it, or move this VM's forwards: TWOW_SSH_PORT=<port> $0"
   done
   say "booting the VM headless as $VM_NAME ($VM_CPUS cores, $VM_MEM, ports $SSH_PORT/$REALM_PORT/$WORLD_PORT)"
   # -name puts the identity in the process list, which is how this VM is found
