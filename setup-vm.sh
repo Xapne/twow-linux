@@ -74,6 +74,10 @@ SSHOPTS=(-p "$SSH_PORT" -i "$WORKDIR/vmkey" -o StrictHostKeyChecking=accept-new
 vm()   { ssh  "${SSHOPTS[@]}" turtle@127.0.0.1 "$@"; }
 vmtty(){ ssh -t "${SSHOPTS[@]}" turtle@127.0.0.1 "$@"; }
 vm_up(){ vm -o ConnectTimeout=3 true 2>/dev/null; }
+# The kit records the database's user and password in server/db.env, so they are
+# read from there rather than assumed. root/mangos are only defaults, and a
+# TWOW_DB_PASS set by the operator silently broke every query hardcoded here.
+vmdb() { vm "cd twow && . server/db.env 2>/dev/null; mariadb --socket=server/db/mysql.sock -u \"\${TWOW_DB_USER:-root}\" -p\"\${TWOW_DB_PASS:-mangos}\" $*"; }
 
 # =============================================================================
 # host dependencies, reactive on the distro
@@ -401,7 +405,7 @@ open_forwards() {
   local lanip
   lanip=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+' || true)
   if [[ -n "$lanip" ]]; then
-    vm "mariadb --socket=twow/server/db/mysql.sock -u root -pmangos turtle_logon -e \"UPDATE realmlist SET address='$lanip'\""
+    vmdb "turtle_logon -e \"UPDATE realmlist SET address='$lanip'\""
     say "realm reachable from this host and the LAN: set realmlist $lanip"
     note "if a firewall runs here, open tcp $REALM_PORT and $WORLD_PORT"
   else
@@ -413,38 +417,17 @@ open_forwards() {
 # GM account - do it for them, and teach the console way
 # =============================================================================
 make_account() {
-  # setup-native.sh asks only while there is no account of the operator's own,
-  # and this path should not differ: re-running the installer after making one
-  # offered to make it again. The repack's shared ADMIN and TEST are excluded,
-  # the same pair setup-native.sh keeps in STOCK_ACCOUNTS, so the offer still
-  # appears on a server where nobody has an account of their own yet. If the
-  # question cannot be answered the offer stands, since asking twice is a
-  # smaller fault than never asking at all.
-  local own
-  own=$(vm 'mariadb --socket=twow/server/db/mysql.sock -u root -pmangos turtle_logon -N -B -e "SELECT COUNT(*) FROM account WHERE \`rank\` >= 3 AND username NOT IN (\"ADMIN\",\"TEST\")"' 2>/dev/null) || own=""
-  if [[ "$own" =~ ^[0-9]+$ ]] && (( own > 0 )); then
-    say "game master account already there"
-    note "another one: $0 ssh, then cd twow && ./setup-native.sh account"
-    return 0
-  fi
-  ui_intro "game master account"
-  note "how it works in the world console:  account create <name> <pass>"
-  note "                                    account set gmlevel <name> 3"
-  ui_select "Create a GM account now, before the world starts?" 0 \
-    "Yes, create one for me" "Skip, I'll do it in the console"
-  (( ANSWER == 0 )) || { ui_outro "skipped - use the console commands above once the world is up"; return; }
-  ui_text "Account name" "apostle"
-  local acc=${ANSWER^^}
-  ui_text "Password" "mysecret"
-  local pass=${ANSWER^^}
-  local hash
-  hash=$(printf '%s:%s' "$acc" "$pass" | sha1sum | cut -d' ' -f1 | tr a-z A-Z)
-  vm "mariadb --socket=twow/server/db/mysql.sock -u root -pmangos turtle_logon -e \"
-    INSERT INTO account (username, sha_pass_hash, joindate) VALUES ('$acc','$hash',NOW())
-      ON DUPLICATE KEY UPDATE sha_pass_hash='$hash';
-    UPDATE account SET rank = 3 WHERE username = '$acc';\"" \
-    || { warn "database insert failed - create it in the console instead (commands above)"; return; }
-  ui_outro "GM account ready: ${C_BOLD}${acc,,}${C_RST} (rank 3) - log in with it from the client"
+  # Handed to the kit rather than written twice. This used to hash the password,
+  # write the INSERT and keep its own copy of the stock account names, and the
+  # two copies had already diverged: only the kit's rejects a name the client
+  # cannot type or an empty password, and only the kit's knew to stay quiet on a
+  # re-run. It also reaches the database through the kit's own credentials,
+  # which a hardcoded root/mangos here got wrong the moment anyone set
+  # TWOW_DB_PASS. Failure is not fatal: the world console makes accounts too.
+  vmtty 'cd twow && ./setup-native.sh account --if-none' \
+    || warn "the account step did not finish; the world console makes them too:
+  account create <name> <pass>  and  account set gmlevel <name> 3"
+  return 0
 }
 
 # =============================================================================
