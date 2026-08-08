@@ -88,14 +88,17 @@ detect_distro() {
   # shellcheck source=/dev/null
   id=$(. "${OS_RELEASE:-/etc/os-release}" 2>/dev/null && echo "${ID:-} ${ID_LIKE:-}") || id=""
   case " $id " in
-    *" debian "*|*" ubuntu "*) DISTRO_COL=5; INSTALL="sudo apt install -y";;
-    *" fedora "*|*" rhel "*|*" centos "*) DISTRO_COL=6; INSTALL="sudo dnf install -y";;
-    *" suse "*|*" opensuse "*) DISTRO_COL=7; INSTALL="sudo zypper install -y";;
+    *" debian "*|*" ubuntu "*) DISTRO_COL=5; INSTALL="apt install -y";;
+    *" fedora "*|*" rhel "*|*" centos "*) DISTRO_COL=6; INSTALL="dnf install -y";;
+    *" suse "*|*" opensuse "*) DISTRO_COL=7; INSTALL="zypper install -y";;
     *)
-      DISTRO_COL=8; INSTALL="sudo pacman -S --needed"
+      DISTRO_COL=8; INSTALL="pacman -S --needed"
       case " $id " in *" arch "*|*" manjaro "*|*" endeavouros "*) ;; *)
         [[ -n "$id" ]] && UNKNOWN_DISTRO=1;; esac;;
   esac
+  # A container is usually entered as root and often carries no sudo, so an
+  # install line naming it would not run as printed.
+  [[ $EUID -eq 0 ]] || INSTALL="sudo $INSTALL"
 }
 
 # Split one row into the caller's local variables. Kept in one place so the
