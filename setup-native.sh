@@ -176,6 +176,26 @@ find_mariadbd() {
 # checks have to look at the command line, not the process name.
 world_running() { pgrep -f 'mangosd -c' >/dev/null 2>&1; }
 
+# The pid holding a port, but only when the binary behind it is one of ours.
+# Anything may listen on 3724: a second install of this kit, a repack still
+# running under wine, or a virtual machine forwarding the port from a guest.
+# Treating any listener as proof that our login server is up starts the world
+# against somebody else's, which fails later and further away. /proc/pid/exe is
+# asked rather than the command line, since that cannot be spoofed by a name.
+our_listener() {  # $1 port -> pid, or empty when nobody or not ours
+  local pid exe
+  pid=$( { ss -tlnp 2>/dev/null || true; } | grep "[:.]$1 " | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2)
+  [[ -n "$pid" ]] || return 0
+  exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null) || return 0
+  [[ "$exe" == "$SERVER/bin/"* ]] && printf '%s' "$pid"
+  return 0
+}
+
+# Someone is on the port, and it is not us.
+port_taken_by_other() {  # $1 port
+  ss -tln 2>/dev/null | grep -q "[:.]$1 " && [[ -z "$(our_listener "$1")" ]]
+}
+
 # Copy into place without ETXTBSY: write beside the target, then rename over
 # it. rename() only swaps the directory entry, so a running binary keeps its
 # old inode and the next start picks up the new one.
@@ -1061,6 +1081,63 @@ update_all() {
 }
 
 # -----------------------------------------------------------------------------
+# What is running, and stopping it
+# -----------------------------------------------------------------------------
+status_all() {
+  local pid
+  if [[ -d "$SERVER/db/mysql" ]] && mariadb_running; then
+    resolve_db_port
+    say "database  running on $TWOW_DB_HOST:$TWOW_DB_PORT"
+  else
+    warn "database  not running"
+  fi
+  pid=$(our_listener 3724)
+  if [[ -n "$pid" ]]; then say "realmd    running on 3724 (pid $pid)"
+  elif ss -tln 2>/dev/null | grep -q '[:.]3724 '; then warn "realmd    not ours; 3724 is held by something else"
+  else warn "realmd    not running"; fi
+  local wp; wp=$(conf_get "$SERVER/bin/mangosd.conf" WorldServerPort 2>/dev/null); wp=${wp:-8091}
+  pid=$(our_listener "$wp")
+  if [[ -n "$pid" ]]; then say "world     running on $wp (pid $pid)"
+  elif world_running; then say "world     starting; not accepting connections yet"
+  else warn "world     not running"; fi
+  return 0
+}
+
+# Stopped in the order they depend on each other: the world writes characters
+# back through the database, so the database outlives it, and realmd sits
+# between them. Each step is skipped when that piece is already down, so this
+# is safe to run twice.
+stop_all() {
+  local pid i
+  if world_running; then
+    say "stopping the world server"
+    # SIGTERM is the core's clean shutdown (SIGINT is its restart signal, which
+    # the run wrapper would answer by starting the world again).
+    pkill -TERM -f 'mangosd -c' 2>/dev/null || true
+    for i in $(seq 1 60); do world_running || break; sleep 1; done
+    world_running && warn "the world server is still running; it may be saving characters"
+  else
+    say "world server already stopped"
+  fi
+  pid=$(our_listener 3724)
+  if [[ -n "$pid" ]]; then
+    say "stopping realmd (pid $pid)"
+    kill -TERM "$pid" 2>/dev/null || true
+    for i in $(seq 1 15); do [[ -n "$(our_listener 3724)" ]] || break; sleep 1; done
+  else
+    say "realmd already stopped"
+  fi
+  if [[ -d "$SERVER/db/mysql" ]] && mariadb_running; then
+    say "stopping the database"
+    mariadb-admin --socket="$SERVER/db/mysql.sock" -u "$TWOW_DB_USER" -p"$TWOW_DB_PASS" shutdown \
+      >/dev/null 2>&1 || warn "the database did not accept the shutdown; it is still running"
+  else
+    say "database already stopped"
+  fi
+  say "everything this script starts is stopped"
+}
+
+# -----------------------------------------------------------------------------
 # Run: DB (background) -> realmd (background) -> mangosd (foreground console)
 # -----------------------------------------------------------------------------
 run_all() {
@@ -1072,12 +1149,21 @@ run_all() {
   # before this check existed.
   fix_stale_maintenance
 
-  if ! ss -tln | grep -q ':3724 '; then
-    ( cd "$SERVER/bin" && nohup ./realmd -c realmd.conf > "$SERVER/logs/realmd.out" 2>&1 & )
-    local i; for i in $(seq 1 15); do ss -tln | grep -q ':3724 ' && break; sleep 1; done
-    ss -tln | grep -q ':3724 ' || die "realmd did not come up, see $SERVER/logs/realmd.out"
+  # "Something is listening" is not "our login server is up". A stranger on
+  # 3724 is reported rather than adopted, since starting the world against
+  # another realm's login server fails much later, with nothing pointing here.
+  if port_taken_by_other 3724; then
+    die "port 3724 is held by something that is not this server's realmd.
+  Another install of this kit, a repack still running under wine, or a virtual
+  machine forwarding the port? Stop it, then start again. What holds it:
+  ss -tlnp | grep ':3724 '"
   fi
-  say "realmd ready on 3724"
+  if [[ -z "$(our_listener 3724)" ]]; then
+    ( cd "$SERVER/bin" && nohup ./realmd -c realmd.conf > "$SERVER/logs/realmd.out" 2>&1 & )
+    local i; for i in $(seq 1 15); do [[ -n "$(our_listener 3724)" ]] && break; sleep 1; done
+    [[ -n "$(our_listener 3724)" ]] || die "realmd did not come up, see $SERVER/logs/realmd.out"
+  fi
+  say "realmd ready on 3724 (pid $(our_listener 3724))"
 
   say "starting mangosd in the foreground; this terminal is the server console"
   say "first boot loads all maps and takes a few minutes; stop with Ctrl+C"
@@ -1090,7 +1176,7 @@ run_all() {
   local rc=0
   "$SERVER/3-world-server.sh" "$@" || rc=$?
   warn "world server stopped; realmd and MariaDB are still running.
-  Stop them with: pkill -INT -f \"realmd -c\"; mariadb-admin --socket=$SERVER/db/mysql.sock -u $TWOW_DB_USER -p$TWOW_DB_PASS shutdown"
+  Stop them with: $0 stop     (or $0 status to see what is up)"
   return $rc
 }
 
@@ -1129,6 +1215,9 @@ ${C_BOLD}Modes:${C_RST}
                  what this system needs, what is already there, and the
                  one command that installs the rest; --packages prints
                  the bare list (setup-vm.sh provisions its guest with it)
+  ${C_GREEN}status${C_RST}         what is running: database, realmd, world, and their ports
+  ${C_GREEN}stop${C_RST}           stop the world, then realmd, then the database, in that
+                 order; safe to run when some of them are already down
   ${C_GREEN}realm${C_RST} <address> [--bind <address>]
                  set what clients are told to connect to, writing both the
                  realm address and BindIP so the two agree. 127.0.0.1 keeps
@@ -1205,6 +1294,8 @@ case "$mode" in
     sync_client_realmlist
     say "realm answers at $2, listening on ${REALM_BIND:-?}"
     say "restart the server to apply: $0 run" ;;
+  status) status_all ;;
+  stop)   stop_all ;;
   update) check_deps; update_all ;;
   deps)
     case "${2:-}" in
