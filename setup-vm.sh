@@ -230,33 +230,27 @@ boot_vm() {
 }
 
 # =============================================================================
-# provision the guest (Debian deps + the two quirk fixes + the kit)
+# the kit inside the guest, brought up to date on every run
 # =============================================================================
-provision() {
-  # Debian keeps mariadbd in /usr/sbin, which a non-interactive ssh shell does
-  # not carry on PATH, so it is looked for there too. The kit is asked whether
-  # it still answers rather than only whether its directory exists: a directory
-  # left by an earlier run can hold a copy too old to provision from.
-  if vm 'command -v ninja >/dev/null &&
-         { command -v mariadbd >/dev/null || [ -x /usr/sbin/mariadbd ]; } &&
-         twow/setup-native.sh deps --packages >/dev/null 2>&1' 2>/dev/null; then
-    say "guest already provisioned"; return
-  fi
-  say "provisioning the guest (apt + the kit)"
-  note "full log: $WD/logs/provision.log"
-  vm "KIT_REPO='$KIT_REPO' bash -s" > "$WORKDIR/logs/provision.log" 2>&1 <<'GUEST' || die "provisioning failed, see $WD/logs/provision.log"
+# This is deliberately outside provision(). Provisioning is skipped once the
+# guest has its packages, which is the whole point of the guard, but the kit is
+# the part that changes: leaving its refresh in there meant an existing VM
+# stayed on whatever it was built with and never saw a later fix. The apt work
+# stays behind the guard, this does not, and a pull costs nothing when there is
+# nothing to pull.
+sync_kit() {
+  say "updating the kit inside the guest"
+  vm "KIT_REPO='$KIT_REPO' bash -s" > "$WORKDIR/logs/kit.log" 2>&1 <<'GUEST' || die "kit sync failed, see $WD/logs/kit.log"
 set -euo pipefail
-export DEBIAN_FRONTEND=noninteractive
-sudo apt-get update -qq
-sudo apt-get full-upgrade -y -qq
-# The kit names its own dependencies (the DEPS table in setup-native.sh is the
-# only list of them), so it is cloned first and then asked what to install.
-sudo apt-get install -y -qq git
-
-# The kit is brought up to date rather than assumed current. A twow directory
-# is not proof of a checkout: an interrupted run, or one that pushed the
-# payload before cloning, leaves a plain directory that "test -d" accepts and
-# whose stale script is then used on every later run.
+# The kit names the packages provisioning installs, so it has to arrive first,
+# and on a guest that has never been provisioned git is not there yet.
+command -v git >/dev/null 2>&1 || {
+  sudo apt-get update -qq
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git
+}
+# A twow directory is not proof of a checkout: an interrupted run, or one that
+# pushed the payload before cloning, leaves a plain directory that "test -d"
+# accepts and whose stale script would then be used on every later run.
 if [ -d twow/.git ]; then
   git -C twow pull -q --ff-only || echo "kit pull failed, keeping the copy on disk"
 elif [ -d twow ]; then
@@ -269,7 +263,36 @@ elif [ -d twow ]; then
 else
   git clone -q "$KIT_REPO" twow
 fi
+GUEST
+  local at; at=$(vm "git -C twow log -1 --format='%h %s'" 2>/dev/null || true)
+  [[ -n "$at" ]] && note "kit at $at"
+  return 0
+}
 
+# =============================================================================
+# provision the guest (Debian deps + the two quirk fixes)
+# =============================================================================
+# Runs after sync_kit, which is what puts setup-native.sh in place; the package
+# list is read from it rather than repeated here.
+provision() {
+  # Debian keeps mariadbd in /usr/sbin, which a non-interactive ssh shell does
+  # not carry on PATH, so it is looked for there too. The kit is asked whether
+  # it still answers rather than only whether its directory exists: a directory
+  # left by an earlier run can hold a copy too old to provision from.
+  if vm 'command -v ninja >/dev/null &&
+         { command -v mariadbd >/dev/null || [ -x /usr/sbin/mariadbd ]; } &&
+         twow/setup-native.sh deps --packages >/dev/null 2>&1' 2>/dev/null; then
+    say "guest already provisioned"; return
+  fi
+  say "provisioning the guest (apt)"
+  note "full log: $WD/logs/provision.log"
+  vm "bash -s" > "$WORKDIR/logs/provision.log" 2>&1 <<'GUEST' || die "provisioning failed, see $WD/logs/provision.log"
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+sudo apt-get update -qq
+sudo apt-get full-upgrade -y -qq
+# The kit names its own dependencies (the DEPS table in setup-native.sh is the
+# only list of them), so it is asked what to install rather than repeating them.
 # A kit that predates the deps mode prints its help text on stdout instead,
 # and apt rejects the first word carrying a slash with a one-line error that
 # names neither the kit nor the reason. Check the shape before handing it over.
@@ -727,6 +750,7 @@ main() {
   make_seed
   make_disk
   boot_vm
+  sync_kit
   provision
   push_payload
   convert
