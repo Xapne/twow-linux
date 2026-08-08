@@ -453,15 +453,49 @@ handoff() {
 }
 
 # =============================================================================
+# The kit speaks in "[setup]" and "[warn]" lines, coloured. They are re-emitted
+# here in this script's gutter style, with the severity kept: a "not running"
+# arrives as a warning and should still look like one.
+relay_kit() {
+  local line
+  while IFS= read -r line; do
+    line=$(printf '%s' "$line" | sed 's/\x1b\[[0-9;]*m//g')
+    case "$line" in
+      "")          continue;;
+      "[warn] "*)  warn "${line#"[warn] "}";;
+      "[error] "*) warn "${line#"[error] "}";;
+      "[setup] "*) note "${line#"[setup] "}";;
+      *)           note "$line";;
+    esac
+  done
+  return 0
+}
+
+# Only the machine is this script's to report on. What is running inside it is
+# the kit's business, and it answers better than a port check from out here can:
+# it matches each listener against its own binaries rather than trusting whoever
+# holds the port.
 status() {
   ui_intro "status"
-  if vm_up; then note "VM: running (ssh $SSH_PORT)"; else note "VM: not running"; fi
-  if vm_up; then
-    vm 'test -x twow/server/bin/mangosd' 2>/dev/null && note "conversion: done" || note "conversion: not done"
-    vm 'ss -tln | grep -q ":3724 "' 2>/dev/null && note "realmd: up (3724)" || note "realmd: down"
-    vm "ss -tln | grep -q ':$WORLD_PORT '" 2>/dev/null && note "mangosd: up ($WORLD_PORT)" || note "mangosd: down"
+  if ! vm_up; then
+    note "VM: not running"
+    ui_outro "work dir: $WD"
+    return 0
   fi
+  note "VM: running (ssh $SSH_PORT, forwards $REALM_PORT/$WORLD_PORT)"
+  vm 'test -x twow/server/bin/mangosd' 2>/dev/null \
+    && note "conversion: done" || note "conversion: not done"
+  { vm 'cd twow && ./setup-native.sh status' 2>/dev/null || true; } | relay_kit
   ui_outro "work dir: $WD"
+}
+
+# The services inside the VM, stopped by the kit. The machine itself is left
+# running: '$0 destroy' is what removes that, and it asks first.
+stop() {
+  ui_intro "stop the server"
+  vm_up || { note "VM is not running, so nothing inside it is either"; ui_outro "nothing to do"; return 0; }
+  { vm 'cd twow && ./setup-native.sh stop' 2>&1 || true; } | relay_kit
+  ui_outro "the VM is still running; '$0' starts the server again"
 }
 
 # =============================================================================
@@ -706,10 +740,13 @@ ${C_BOLD}Usage:${C_RST}  $0 [mode]
 ${C_BOLD}Modes:${C_RST}
   ${C_GREEN}(none)${C_RST}     do everything: host deps, VM, provisioning, payload,
              conversion (live progress), GM account, world console
-  ${C_GREEN}console${C_RST}    reattach this terminal to the world console
+  ${C_GREEN}console${C_RST} [level]
+             reattach this terminal to the world console; optional level
+             is mangosd's console verbosity, 0 (quiet) to 3 (debug)
   ${C_GREEN}tune${C_RST}       run the kit's interactive config inside the VM
   ${C_GREEN}ssh${C_RST}        plain shell inside the VM
-  ${C_GREEN}status${C_RST}     what is running
+  ${C_GREEN}status${C_RST}     what is running, here and inside the VM
+  ${C_GREEN}stop${C_RST}       stop the server inside the VM, leaving the VM up
   ${C_GREEN}vms${C_RST}        every VM this script built, running or not, and a note
              of the VMs on this host that belong to something else
   ${C_GREEN}destroy${C_RST}    pick one of this script's VMs and remove it
@@ -729,10 +766,14 @@ main() {
   case "${1:-}" in
     help|-h|--help) usage; exit 0;;
     status)  status; exit 0;;
+    stop)    ui_banner "apne's vm deployer" "for TurtleWoW on Linux"; stop; exit 0;;
     vms)     ui_banner "apne's vm deployer" "for TurtleWoW on Linux"; vms; exit 0;;
     destroy) ui_banner "apne's vm deployer" "for TurtleWoW on Linux"; destroy; exit 0;;
     ssh)     exec ssh -t "${SSHOPTS[@]}" turtle@127.0.0.1;;
-    console) exec ssh -t "${SSHOPTS[@]}" turtle@127.0.0.1 'cd twow && ./setup-native.sh run 1';;
+    # The console log level is the kit's argument, passed through rather than
+    # fixed at 1: reattaching at 2 or 3 is how anything is diagnosed, and
+    # ssh-ing in by hand to do it was the only way before.
+    console) exec ssh -t "${SSHOPTS[@]}" turtle@127.0.0.1 "cd twow && ./setup-native.sh run ${2:-1}";;
     tune)    exec ssh -t "${SSHOPTS[@]}" turtle@127.0.0.1 'cd twow && ./setup-native.sh interactive';;
     "") ;;
     *) usage; die "unknown mode: $1";;
