@@ -9,7 +9,7 @@
 #   client/   the 1.18.1 game client (only needed to play, not to convert)
 #   src/      Penqle/tortoise-wow source, branch 1181dev
 #   build/    native build tree
-#   deps/     locally built ACE library
+#   deps/     locally built ACE library, where the distro packages none
 #   lib/      terminal prompts shared with setup-vm.sh
 #
 # Usage: ./setup-native.sh help
@@ -40,39 +40,109 @@ die()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
 
 DB() { mariadb -h "$TWOW_DB_HOST" -P "$TWOW_DB_PORT" -u "$TWOW_DB_USER" -p"$TWOW_DB_PASS" --max-allowed-packet=128M "$@"; }
 
-# -----------------------------------------------------------------------------
-# dependencies, with the exact package to install when one is missing
-# -----------------------------------------------------------------------------
-# What this distro calls things. Falls back to Arch names with a note when
-# the distro is unknown; INSTALL is the command that would install them.
+# =============================================================================
+# Dependencies: the single source of truth
+# =============================================================================
+# Every dependency is declared once in DEPS. The missing-dependency report, the
+# install command shown on failure, the `deps` mode and setup-vm.sh's guest
+# provisioning are all derived from it, so no package name belongs anywhere
+# else in the repo; a second list drifts, and the drift surfaces twenty minutes
+# into a compile.
+#
+# Columns, separated by | :
+#   1 label   name used in the report
+#   2 kind    cmd      every command in column 3 is on PATH
+#             daemon   the mariadb daemon, wherever the distro hides it
+#             header   every header in column 3 is under /usr/include
+#             header1  at least one header in column 3 (either spelling)
+#             ace      a system ACE >= $ACE_MIN_MAJOR
+#   3 target  what is checked, space separated; empty where the kind knows
+#   4 tier    required  missing stops the run
+#             optional  missing only costs build time
+#             seed      needed once, for the initial database seed
+#   5-8 package on debian | fedora | suse | arch; "-" where unpackaged, which
+#       skips the row on that distro
+DEPS=(
+  "C/C++ toolchain|cmd|gcc g++ make|required|build-essential|gcc gcc-c++ make|gcc gcc-c++ make|gcc make"
+  "cmake|cmd|cmake|required|cmake|cmake|cmake|cmake"
+  "ninja|cmd|ninja|required|ninja-build|ninja-build|ninja|ninja"
+  "git|cmd|git|required|git|git|git|git"
+  "curl|cmd|curl|required|curl|curl|curl|curl"
+  "bsdtar|cmd|bsdtar|required|libarchive-tools|bsdtar|bsdtar|libarchive"
+  "sha1sum|cmd|sha1sum|required|coreutils|coreutils|coreutils|coreutils"
+  "MariaDB client tools|cmd|mariadb mariadb-dump mariadb-admin|required|mariadb-client|mariadb|mariadb-client|mariadb-clients"
+  "MariaDB daemon|daemon||required|mariadb-server|mariadb-server|mariadb|mariadb"
+  "mariadb-install-db|cmd|mariadb-install-db|required|mariadb-server|mariadb-server|mariadb|mariadb"
+  "MySQL headers|header1|mysql/mysql.h mariadb/mysql.h|required|default-libmysqlclient-dev|mariadb-connector-c-devel|libmariadb-devel|mariadb-libs"
+  "OpenSSL headers|header|openssl/ssl.h|required|libssl-dev|openssl-devel|libopenssl-devel|openssl"
+  "ZLIB headers|header|zlib.h|required|zlib1g-dev|zlib-devel|zlib-devel|zlib"
+  "ACE library|ace||optional|libace-dev|-|-|-"
+  "wine|cmd|wine|seed|wine|wine|wine|wine"
+)
+
+# What this distro calls things. Falls back to Arch names with a note when the
+# distro is unknown; DISTRO_COL selects the column, INSTALL is the command that
+# installs from it.
 detect_distro() {
   local id
   # shellcheck source=/dev/null
   id=$(. "${OS_RELEASE:-/etc/os-release}" 2>/dev/null && echo "${ID:-} ${ID_LIKE:-}") || id=""
   case " $id " in
-    *" debian "*|*" ubuntu "*)
-      INSTALL="sudo apt install -y"
-      PKG_BUILD="build-essential cmake"; PKG_NINJA="ninja-build"; PKG_TAR="libarchive-tools"
-      PKG_DB="mariadb-server mariadb-client"; PKG_WINE="wine"
-      PKG_DEV="default-libmysqlclient-dev libssl-dev zlib1g-dev";;
-    *" fedora "*|*" rhel "*|*" centos "*)
-      INSTALL="sudo dnf install -y"
-      PKG_BUILD="gcc gcc-c++ make cmake"; PKG_NINJA="ninja-build"; PKG_TAR="bsdtar"
-      PKG_DB="mariadb-server mariadb"; PKG_WINE="wine"
-      PKG_DEV="mariadb-connector-c-devel openssl-devel zlib-devel";;
-    *" suse "*|*" opensuse "*)
-      INSTALL="sudo zypper install -y"
-      PKG_BUILD="gcc gcc-c++ make cmake"; PKG_NINJA="ninja"; PKG_TAR="bsdtar"
-      PKG_DB="mariadb mariadb-client"; PKG_WINE="wine"
-      PKG_DEV="libmariadb-devel libopenssl-devel zlib-devel";;
+    *" debian "*|*" ubuntu "*) DISTRO_COL=5; INSTALL="sudo apt install -y";;
+    *" fedora "*|*" rhel "*|*" centos "*) DISTRO_COL=6; INSTALL="sudo dnf install -y";;
+    *" suse "*|*" opensuse "*) DISTRO_COL=7; INSTALL="sudo zypper install -y";;
     *)
-      INSTALL="sudo pacman -S --needed"
-      PKG_BUILD="gcc make cmake"; PKG_NINJA="ninja"; PKG_TAR="libarchive"
-      PKG_DB="mariadb"; PKG_WINE="wine"
-      PKG_DEV=""  # Arch ships headers with the runtime packages
+      DISTRO_COL=8; INSTALL="sudo pacman -S --needed"
       case " $id " in *" arch "*|*" manjaro "*|*" endeavouros "*) ;; *)
         [[ -n "$id" ]] && UNKNOWN_DISTRO=1;; esac;;
   esac
+}
+
+# Split one row into the caller's local variables. Kept in one place so the
+# column order is written down exactly once.
+dep_parse() {
+  IFS='|' read -r d_label d_kind d_target d_tier d_deb d_fed d_suse d_arch <<<"$1"
+  case $DISTRO_COL in
+    5) d_pkg=$d_deb;; 6) d_pkg=$d_fed;; 7) d_pkg=$d_suse;; *) d_pkg=$d_arch;;
+  esac
+}
+
+dep_present() {
+  local kind=$1 target=$2 t
+  case "$kind" in
+    cmd)     for t in $target; do command -v "$t" >/dev/null 2>&1 || return 1; done;;
+    daemon)  find_mariadbd >/dev/null || return 1;;
+    header)  for t in $target; do [[ -f "/usr/include/$t" ]] || return 1; done;;
+    header1) for t in $target; do [[ -f "/usr/include/$t" ]] && return 0; done; return 1;;
+    ace)     system_ace >/dev/null || return 1;;
+  esac
+  return 0
+}
+
+# The package providing one labelled row, for messages that name a single
+# dependency rather than the whole list.
+dep_pkg_of() {
+  local row d_label d_kind d_target d_tier d_deb d_fed d_suse d_arch d_pkg
+  for row in "${DEPS[@]}"; do
+    dep_parse "$row"
+    [[ "$d_label" == "$1" ]] && { printf '%s' "$d_pkg"; return 0; }
+  done
+  printf '%s' "$1"
+}
+
+# Every package for this distro, in table order, deduplicated. This is what
+# setup-vm.sh provisions its guest with.
+dep_packages() {
+  local row one out=() seen=" " d_label d_kind d_target d_tier d_deb d_fed d_suse d_arch d_pkg
+  for row in "${DEPS[@]}"; do
+    dep_parse "$row"
+    [[ "$d_pkg" == "-" || -z "$d_pkg" ]] && continue
+    for one in $d_pkg; do
+      [[ "$seen" == *" $one "* ]] && continue
+      seen+="$one "; out+=("$one")
+    done
+  done
+  printf '%s\n' "${out[*]}"
 }
 
 # The daemon lives in a different place on every distro, and some of them
@@ -106,39 +176,60 @@ install_binaries() {
   done
 }
 
+# The headers are checked alongside the commands because distros that split
+# their -dev packages pass every command check and then fail inside cmake.
+# Deferred tiers are reported up front too: an hour of compiling before the
+# database step announces a missing wine is the failure mode this prevents.
 check_deps() {
-  local -A pkg=(
-    [gcc]=$PKG_BUILD [g++]=$PKG_BUILD [make]=$PKG_BUILD [cmake]=$PKG_BUILD
-    [ninja]=$PKG_NINJA [git]=git [curl]=curl
-    [bsdtar]=$PKG_TAR [sha1sum]=coreutils
-    [mariadb]=$PKG_DB [mariadb-install-db]=$PKG_DB
-    [mariadb-dump]=$PKG_DB [mariadb-admin]=$PKG_DB
-  )
-  local missing=() c
-  for c in "${!pkg[@]}"; do
-    command -v "$c" >/dev/null 2>&1 || missing+=("$c (${pkg[$c]})")
+  local row missing=() later=()
+  local d_label d_kind d_target d_tier d_deb d_fed d_suse d_arch d_pkg
+  for row in "${DEPS[@]}"; do
+    dep_parse "$row"
+    [[ "$d_pkg" == "-" ]] && continue
+    dep_present "$d_kind" "$d_target" && continue
+    case "$d_tier" in
+      required) missing+=("$d_label ($d_pkg)") ;;
+      optional) later+=("no system ACE; it gets built from source here, which costs
+  a few minutes on the first run. Skip that with: $INSTALL $d_pkg") ;;
+      seed)     seeded || later+=("the one-time database seed further down needs wine,
+  which is missing. Install it before then: $INSTALL $d_pkg") ;;
+    esac
   done
-  find_mariadbd >/dev/null || missing+=("mariadbd ($PKG_DB)")
 
-  # Headers, not binaries: distros that split -dev packages pass every command
-  # check above and then fail in cmake. Catch it here instead.
-  local h hdr_missing=()
-  for h in mysql/mysql.h mariadb/mysql.h; do
-    [[ -f "/usr/include/$h" ]] && { hdr_missing=(); break; }
-    hdr_missing=(MySQL)
-  done
-  [[ -f /usr/include/openssl/ssl.h ]] || hdr_missing+=(OpenSSL)
-  [[ -f /usr/include/zlib.h ]]        || hdr_missing+=(ZLIB)
-
-  if ((${#missing[@]})) || ((${#hdr_missing[@]})); then
-    local msg="missing dependencies:"
-    ((${#missing[@]}))     && msg+=$'\n  commands: '"${missing[*]}"
-    ((${#hdr_missing[@]})) && msg+=$'\n  headers:  '"${hdr_missing[*]} (development packages)"
-    msg+=$'\n\n  '"$INSTALL $PKG_BUILD $PKG_NINJA git curl $PKG_TAR $PKG_DB${PKG_DEV:+ $PKG_DEV}"
-    [[ -n "${UNKNOWN_DISTRO:-}" ]] && msg+=$'\n  (unrecognized distro; those are Arch package names, adapt as needed)'
+  if ((${#missing[@]})); then
+    local msg="missing dependencies:" m
+    for m in "${missing[@]}"; do msg+=$'\n    '"$m"; done
+    msg+=$'\n\n  install all of them with:\n\n  '"$INSTALL $(dep_packages)"
+    [[ -n "${UNKNOWN_DISTRO:-}" ]] && msg+=$'\n\n  (unrecognized distro; those are Arch package names, adapt as needed)'
     die "$msg"
   fi
   say "all required commands and headers present"
+  local l; for l in "${later[@]}"; do warn "$l"; done
+}
+
+# Whether the game databases have already been imported. InnoDB gives each
+# database a directory, so this answers without starting the server.
+seeded() { [[ -d "$SERVER/db/turtle_logon" ]]; }
+
+# Dependency status for every tier, plus the command that installs the lot.
+deps_report() {
+  local row mark d_label d_kind d_target d_tier d_deb d_fed d_suse d_arch d_pkg
+  printf '\n%s\n\n' "${C_BOLD}Dependencies for this system${C_RST}"
+  for row in "${DEPS[@]}"; do
+    dep_parse "$row"
+    if [[ "$d_pkg" == "-" ]]; then
+      mark="${C_GRAY}-${C_RST}"; d_pkg="not packaged on this distro, handled by the script"
+    elif dep_present "$d_kind" "$d_target"; then
+      mark="${C_GREEN}✓${C_RST}"
+    else
+      mark="${C_YELLOW}✗${C_RST}"
+    fi
+    printf '  %s %-22s %-9s %s\n' "$mark" "$d_label" "$d_tier" "${C_DIM}$d_pkg${C_RST}"
+  done
+  printf '\n  %s\n\n' "$INSTALL $(dep_packages)"
+  [[ -n "${UNKNOWN_DISTRO:-}" ]] \
+    && printf '  %s\n\n' "(unrecognized distro; those are Arch package names, adapt as needed)"
+  return 0
 }
 
 # -----------------------------------------------------------------------------
@@ -402,7 +493,7 @@ start_native_db() {
   # distros disagree on where the daemon lives (/usr/bin on Arch, /usr/sbin on
   # Debian, /usr/libexec on Fedora); ask the shell instead of guessing
   local mariadbd; mariadbd=$(find_mariadbd) \
-    || die "no mariadbd/mysqld found; install $PKG_DB"
+    || die "no mariadbd/mysqld found; install $(dep_pkg_of 'MariaDB daemon')"
   nohup "$mariadbd" --defaults-file="$SERVER/my.cnf" > "$SERVER/logs/mysql.out" 2>&1 &
   local i; for i in $(seq 1 30); do [[ -S "$SERVER/db/mysql.sock" ]] && break; sleep 1; done
   [[ -S "$SERVER/db/mysql.sock" ]] || die "MariaDB did not come up. Last lines of ${SERVER#"$ROOT"/}/logs/mysql.out:
@@ -435,9 +526,10 @@ ensure_database() {
   fi
 
   # Seed: dump the four preloaded DBs out of the bundled Windows MariaDB.
-  # One-time only; needs wine.
+  # One-time only; needs wine. The package name comes from the DEPS table so
+  # this message cannot drift away from what check_deps warns about earlier.
   command -v wine >/dev/null 2>&1 \
-    || die "game databases are empty and seeding them needs wine once ($INSTALL $PKG_WINE).
+    || die "game databases are empty and seeding them needs wine once ($INSTALL $(dep_pkg_of wine)).
   Alternative: import dumps you already have into $TWOW_DB_HOST:$TWOW_DB_PORT."
   local windb="$SERVER/mariadb-10.3.39-winx64"
   [[ -d "$windb/data/turtle_logon" ]] \
@@ -736,6 +828,10 @@ ${C_BOLD}Modes:${C_RST}
                  it does unpack the repack when that has not happened
                  yet, since the settings live in it. Restart the server
                  afterwards to apply.${C_RST}
+  ${C_GREEN}deps${C_RST} [--packages]
+                 what this system needs, what is already there, and the
+                 one command that installs the rest; --packages prints
+                 the bare list (setup-vm.sh provisions its guest with it)
   ${C_GREEN}update${C_RST}         after upstream changes: pull the latest 1181dev source,
                  rebuild only what changed, back up the world database,
                  then apply any new schema migrations.
@@ -769,6 +865,12 @@ case "$mode" in
   run) check_deps; run_all "${@:2}" ;;
   interactive) check_deps; ensure_repack; interactive_config ;;
   update) check_deps; update_all ;;
+  deps)
+    case "${2:-}" in
+      "")         deps_report ;;
+      --packages) dep_packages ;;
+      *)          die "unknown option '$2'; deps takes --packages or nothing" ;;
+    esac ;;
   help|-h|--help) usage ;;
   *) warn "unknown mode '$mode'"; usage; exit 1 ;;
 esac

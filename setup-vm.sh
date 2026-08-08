@@ -213,13 +213,13 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 sudo apt-get update -qq
 sudo apt-get full-upgrade -y -qq
-# libace-dev saves the guest a multi-minute ACE build; trixie ships 8.0.2
-sudo apt-get install -y -qq build-essential cmake ninja-build git curl \
-  libarchive-tools default-libmysqlclient-dev libssl-dev zlib1g-dev \
-  libace-dev mariadb-server mariadb-client wine
+# The kit names its own dependencies (the DEPS table in setup-native.sh is the
+# only list of them), so it is cloned first and then asked what to install.
+sudo apt-get install -y -qq git
+[ -d twow ] || git clone -q "$KIT_REPO" twow
+sudo apt-get install -y -qq $(twow/setup-native.sh deps --packages)
 # quirk 1: Debian autostarts a system mariadb on 3306; the kit runs its own
 sudo systemctl disable --now mariadb
-[ -d twow ] || git clone -q "$KIT_REPO" twow
 GUEST
   say "guest provisioned"
 }

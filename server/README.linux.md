@@ -4,8 +4,9 @@ Everything server-side runs natively. No Wine in the server stack.
 
 - `bin/realmd`, `bin/mangosd`: native Linux builds of Penqle's tortoise-wow,
   branch 1181dev, compiled from `../src` into `../build`. ACE is taken from the
-  distribution where a recent enough version is packaged, and otherwise built
-  into `../deps/ACE_wrappers`.
+  distribution where a recent enough version is packaged (`../setup-native.sh
+  deps` says whether it is here), and otherwise built into
+  `../deps/ACE_wrappers`.
 - Database: system MariaDB binary with a project-local data directory in
   `db/`, config in `my.cnf` (127.0.0.1, root/mangos). The port is 3306 where it
   is free and the next one up where a distro MariaDB service already holds it

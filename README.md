@@ -34,6 +34,29 @@ git clone <this repo> twow && cd twow
 
 The script is idempotent: it skips finished steps, so re-run it freely.
 
+## Dependencies
+
+```
+./setup-native.sh deps
+```
+
+Shows what this system needs, what it already has, and the one command that
+installs the rest, in your distro's package names. Every mode runs the same
+check before it starts, and says everything at once - including what only the
+database seed will want later, an hour into the job.
+
+The table it reads lives in `setup-native.sh`, and that is where package names
+belong. `setup-vm.sh` asks for the list with `deps --packages` when it
+provisions its guest, so both paths install from the same place: add a
+dependency once and every install path picks it up.
+
+## Repo layout
+
+- `setup-native.sh` - the converter and the server CLI; owns the dependency table
+- `setup-vm.sh` - the VM deployer, a wrapper around the above
+- `lib/ui.sh` - the terminal prompts and palette both scripts draw with
+- `server/` - the converted repack and its day-to-day scripts
+
 ## Don't want to touch your OS? Build a machine instead
 
 `setup-vm.sh` runs the whole thing inside a fresh headless Debian VM and
