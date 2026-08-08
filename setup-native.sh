@@ -778,6 +778,18 @@ ensure_database() {
   mariadb-admin -h 127.0.0.1 -P "$seedport" -u root -p"$TWOW_SEED_PASS" --skip-ssl shutdown || true
   say "importing the seed dump into native MariaDB"
   DB < "$SERVER/logs/seed-dump.sql" || die "import of the seed dump failed"
+  # The dump records the honor maintenance week of the machine it was made on,
+  # which is months old by the time anyone installs from it. The core compares
+  # that date against today, finds it long past, and schedules a restart 15
+  # minutes into a server that has never run. A server with no history has no
+  # maintenance day, so the record is cleared rather than guessed at: the core
+  # fills both dates in itself on first boot, in HonorMaintenancer::Initialize.
+  # This runs in the seeding branch alone, so an existing database is never
+  # touched by it.
+  DB turtle_char -e "UPDATE saved_variables SET lastHonorMaintenanceDay = 0,
+                       nextHonorMaintenanceDay = 0, honorMaintenanceMarker = 0" 2>/dev/null \
+    || warn "could not clear the seeded honor maintenance dates; the server may
+  announce a restart shortly after its first start, which is harmless."
 }
 
 # -----------------------------------------------------------------------------
