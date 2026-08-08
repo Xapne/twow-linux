@@ -367,8 +367,9 @@ $(vm 'tail -n 15 twow/setup.log' 2>/dev/null)"; }
 # =============================================================================
 # open the server to the qemu port forwards
 # The repack binds to 127.0.0.1 inside the VM, which the forwards cannot
-# reach (they target the VM's 10.0.2.15). BindIP 0.0.0.0 opens it while the
-# realm keeps advertising 127.0.0.1 - correct for a client on this host.
+# reach (they target the VM's 10.0.2.15). BindIP 0.0.0.0 opens it, and the
+# realm is then pointed at this host's LAN address below, which a client on
+# this host reaches through the same forwards as one on the LAN.
 # =============================================================================
 open_forwards() {
   vm 'sed -i "s/^BindIP.*/BindIP = \"0.0.0.0\"/" twow/server/bin/realmd.conf twow/server/bin/mangosd.conf'
