@@ -305,10 +305,21 @@ system_ace() {
 # How far the compile may be parallelized, printed only where a cgroup holds
 # this machine to less than it has. nproc counts the host's CPUs even inside a
 # container, so an LXC given two cores on a large host would start one compiler
-# per host CPU and be killed for it; the same goes for a memory cap, at roughly
-# a gigabyte per C++ job. Nothing is printed when neither limit is set, which
-# leaves make and ninja on their own defaults everywhere else.
+# per host CPU and be killed for it. Nothing is printed when neither a CPU nor
+# a memory limit is set, which leaves make and ninja on their own defaults
+# everywhere else.
+#
+# The memory budget comes from measuring this source rather than a rule of
+# thumb. Cost per job climbs as parallelism falls, since fewer jobs average out
+# fewer light files: 0.6 GB per job at 18 of them, 0.87 GB at 3, against a
+# heaviest single file of 1.26 GB. A gigabyte per job is therefore sized for
+# the small container, which is the only place this applies. MEM_RESERVE is
+# what the rest of the container keeps: its init, and on Debian the packaged
+# MariaDB, which is running by then. Page cache is not subtracted, being
+# reclaimable under pressure rather than a cause of the kill.
 CG=/sys/fs/cgroup
+MEM_PER_JOB=$(( 1 << 30 ))
+MEM_RESERVE=$(( 1 << 30 ))
 build_jobs() {
   local jobs cap quota period mem
   jobs=$(nproc 2>/dev/null) || return 0
@@ -326,7 +337,7 @@ build_jobs() {
   [[ -z $mem && -r $CG/memory/memory.limit_in_bytes ]] && mem=$(<"$CG/memory/memory.limit_in_bytes")
   # an unset limit reads as "max" on v2 and as a number near INT64_MAX on v1
   if [[ $mem =~ ^[0-9]+$ ]] && ((mem < (1 << 62))); then
-    cap=$(( mem / (1 << 30) )); ((cap < 1)) && cap=1
+    cap=$(( (mem - MEM_RESERVE) / MEM_PER_JOB )); ((cap < 1)) && cap=1
     ((cap < jobs)) && jobs=$cap
   fi
   ((jobs < $(nproc))) && printf '%s' "$jobs"
