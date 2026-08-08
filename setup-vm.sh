@@ -240,7 +240,23 @@ sudo apt-get full-upgrade -y -qq
 # The kit names its own dependencies (the DEPS table in setup-native.sh is the
 # only list of them), so it is cloned first and then asked what to install.
 sudo apt-get install -y -qq git
-[ -d twow ] || git clone -q "$KIT_REPO" twow
+
+# The kit is brought up to date rather than assumed current. A twow directory
+# is not proof of a checkout: an interrupted run, or one that pushed the
+# payload before cloning, leaves a plain directory that "test -d" accepts and
+# whose stale script is then used on every later run.
+if [ -d twow/.git ]; then
+  git -C twow pull -q --ff-only || echo "kit pull failed, keeping the copy on disk"
+elif [ -d twow ]; then
+  tar czf twow-kitfiles-backup.tgz twow/setup-native.sh twow/lib twow/server/*.sh 2>/dev/null || true
+  git -C twow init -q
+  git -C twow remote add origin "$KIT_REPO" 2>/dev/null \
+    || git -C twow remote set-url origin "$KIT_REPO"
+  git -C twow fetch -q --depth=1 origin HEAD
+  git -C twow checkout -f -B main FETCH_HEAD
+else
+  git clone -q "$KIT_REPO" twow
+fi
 sudo apt-get install -y -qq $(twow/setup-native.sh deps --packages)
 # quirk 1: Debian autostarts a system mariadb on 3306; the kit runs its own
 sudo systemctl disable --now mariadb
