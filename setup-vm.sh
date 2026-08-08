@@ -413,6 +413,20 @@ open_forwards() {
 # GM account - do it for them, and teach the console way
 # =============================================================================
 make_account() {
+  # setup-native.sh asks only while there is no account of the operator's own,
+  # and this path should not differ: re-running the installer after making one
+  # offered to make it again. The repack's shared ADMIN and TEST are excluded,
+  # the same pair setup-native.sh keeps in STOCK_ACCOUNTS, so the offer still
+  # appears on a server where nobody has an account of their own yet. If the
+  # question cannot be answered the offer stands, since asking twice is a
+  # smaller fault than never asking at all.
+  local own
+  own=$(vm 'mariadb --socket=twow/server/db/mysql.sock -u root -pmangos turtle_logon -N -B -e "SELECT COUNT(*) FROM account WHERE \`rank\` >= 3 AND username NOT IN (\"ADMIN\",\"TEST\")"' 2>/dev/null) || own=""
+  if [[ "$own" =~ ^[0-9]+$ ]] && (( own > 0 )); then
+    say "game master account already there"
+    note "another one: $0 ssh, then cd twow && ./setup-native.sh account"
+    return 0
+  fi
   ui_intro "game master account"
   note "how it works in the world console:  account create <name> <pass>"
   note "                                    account set gmlevel <name> 3"
