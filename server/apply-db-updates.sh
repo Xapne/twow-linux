@@ -19,6 +19,24 @@ TWOW_DB_PASS=${TWOW_DB_PASS:-mangos}
 
 DB() { mariadb -h "$TWOW_DB_HOST" -P "$TWOW_DB_PORT" -u "$TWOW_DB_USER" -p"$TWOW_DB_PASS" --max-allowed-packet=128M "$@"; }
 
+# Turns INSERT into REPLACE so rows already carried by the imported dump give
+# way to the migration's newer values. Statements ending in ON DUPLICATE KEY
+# UPDATE settle collisions on their own and are left as they are: REPLACE takes
+# no such clause, and rewriting one produces a syntax error. Statements are
+# gathered up to their closing semicolon, since both forms span many lines.
+to_replace() {
+  awk '
+    function flush() {
+      if (buf ~ /^[[:space:]]*INSERT INTO/ && buf !~ /ON DUPLICATE KEY UPDATE/)
+        sub(/^[[:space:]]*INSERT INTO/, "REPLACE INTO", buf)
+      printf "%s", buf
+      buf = ""
+    }
+    { buf = buf $0 "\n"; if ($0 ~ /;[[:space:]]*$/) flush() }
+    END { if (buf != "") flush() }
+  '
+}
+
 last=$(DB -N -e "SELECT Name FROM turtle_world.migrations WHERE Name REGEXP '^[0-9]{14}_world$' ORDER BY Name DESC LIMIT 1")
 last="${last%_world}"
 echo "DB is at migration: $last"
@@ -32,7 +50,7 @@ for f in $(ls *_world.sql | sort); do
   if DB turtle_world < "$f" 2>"$err"; then
     status=ok
   elif grep -q 'Duplicate entry' "$err" \
-       && sed 's/^INSERT INTO/REPLACE INTO/' "$f" | DB turtle_world 2>"$err"; then
+       && to_replace < "$f" | DB turtle_world 2>"$err"; then
     status="ok (replace)"
   else
     # The client echoes the offending statement ahead of the error, so the
