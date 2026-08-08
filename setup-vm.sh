@@ -631,7 +631,7 @@ check_existing_vms() {
 }
 
 destroy() {
-  local dirs=() d n pid labels=() i
+  local dirs=() d n pid state labels=() i
   vm_adopt_legacy
   mapfile -t dirs < <(vm_known_dirs)
   if ((${#dirs[@]} == 0)); then
@@ -644,7 +644,10 @@ destroy() {
   ui_intro "destroy a VM"
   for d in "${dirs[@]}"; do
     n=$(vm_name_of "$d"); pid=$(vm_pid_in "$d")
-    labels+=("$n  ${pid:+(running)}${pid:-(stopped)}  ${d/#$HOME/\~}")
+    # ${pid:-(stopped)} yields the pid itself when one is set, which put a bare
+    # number in front of every running VM in the list.
+    state=$([[ -n "$pid" ]] && printf '(running)' || printf '(stopped)')
+    labels+=("$n  $state  ${d/#$HOME/\~}")
   done
   labels+=("Cancel, change nothing")
   ui_select "Which VM?" 0 "${labels[@]}"
