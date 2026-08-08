@@ -483,19 +483,75 @@ fix_configs() {
 # -----------------------------------------------------------------------------
 # client safety, if a client is present in client/
 #   - defuse the live launcher, which patches the client and needs WebView2
-#   - report where realmlist points (never changed here: LAN setups use
-#     the host's IP, see the setup guide, Section 14)
+#   - point the client at this server, once the database can say where that is
 # -----------------------------------------------------------------------------
 fix_client() {
   local client="$ROOT/client"
   [[ -d "$client" ]] || { warn "no client/ folder yet; skipping client fixes"; return; }
-  if [[ -f "$client/realmlist.wtf" ]]; then
-    say "client realmlist: $(head -1 "$client/realmlist.wtf") (edit client/realmlist.wtf to change)"
-  fi
   if [[ -f "$client/TurtleWoW.exe" ]]; then
     mv "$client/TurtleWoW.exe" "$client/TurtleWoW.exe.DO-NOT-RUN"
     say "live launcher renamed to TurtleWoW.exe.DO-NOT-RUN (start WoW.exe instead)"
   fi
+}
+
+# Where the realm answers is settled once, in turtle_logon.realmlist, which
+# interactive mode writes when it asks about LAN play. The client reads
+# client/realmlist.wtf, so it is brought to the same address rather than asked
+# again; a client carried over from the live game points at Turtle's own login
+# server otherwise, and connects there instead of here.
+sync_client_realmlist() {
+  local f="$ROOT/client/realmlist.wtf" addr cur want
+  [[ -d "$ROOT/client" ]] || return 0
+  addr=$(DB -N -B -e "SELECT address FROM turtle_logon.realmlist ORDER BY id LIMIT 1" 2>/dev/null) \
+    || return 0
+  [[ -n "$addr" ]] || return 0
+  want="set realmlist $addr"
+  cur=$(head -1 "$f" 2>/dev/null | tr -d '\r')
+  [[ "$cur" == "$want" ]] && return 0
+  printf '%s\n' "$want" > "$f" 2>/dev/null \
+    || { warn "could not write ${f#"$ROOT"/}; point it at the realm by hand: $want"; return 0; }
+  say "client realmlist -> $addr (was ${cur:-unset})"
+}
+
+# The repack ships ADMIN and TEST at rank 4, so the server never lacks a game
+# master; what a new one lacks is an account belonging to whoever set it up.
+# Asking only while there is none keeps a repeated setup quiet.
+STOCK_ACCOUNTS="'ADMIN','TEST'"
+has_own_gm() {
+  local n
+  n=$(DB -N -B -e "SELECT COUNT(*) FROM turtle_logon.account
+        WHERE \`rank\` >= 3 AND username NOT IN ($STOCK_ACCOUNTS)" 2>/dev/null) || return 1
+  [[ "$n" =~ ^[0-9]+$ ]] && ((n > 0))
+}
+
+# Vanilla sends SHA1 of USER:PASS upper-cased, so that is what the column
+# holds. The name is restricted to what the client can type anyway, which also
+# keeps it out of the statement below as anything but a plain word.
+make_gm_account() {
+  local acc pass hash
+  ui_intro "game master account"
+  ui_note "the world console does the same, once it is up:"
+  ui_note "  account create <name> <pass>  and  account set gmlevel <name> 3"
+  ui_select "Create a game master account now?" 0 \
+    "Yes, create one for me" "Skip, I will use the console"
+  (( ANSWER == 0 )) || { ui_outro "skipped; the console commands above still work"; return 0; }
+  ui_text "Account name" "apostle"
+  acc=${ANSWER^^}
+  if [[ ! "$acc" =~ ^[A-Z0-9_]{3,16}$ ]]; then
+    ui_warn "an account name is 3-16 letters, digits or underscores"
+    ui_outro "not created"; return 0
+  fi
+  ui_text "Password" "mysecret"
+  pass=${ANSWER^^}
+  if [[ -z "$pass" ]]; then ui_warn "a password is required"; ui_outro "not created"; return 0; fi
+  hash=$(printf '%s:%s' "$acc" "$pass" | sha1sum | cut -d' ' -f1 | tr a-z A-Z)
+  DB turtle_logon -e "
+    INSERT INTO account (username, sha_pass_hash, joindate) VALUES ('$acc','$hash',NOW())
+      ON DUPLICATE KEY UPDATE sha_pass_hash='$hash';
+    UPDATE account SET \`rank\` = 3 WHERE username = '$acc';" 2>/dev/null \
+    || { ui_warn "the database refused the account; the console commands above still work"
+         ui_outro "not created"; return 0; }
+  ui_outro "log in as ${acc,,} with the password you gave, and you are a game master"
 }
 
 # -----------------------------------------------------------------------------
@@ -867,6 +923,8 @@ interactive_config() {
   ui_num "Starting level for new characters" "$(conf_get "$M" StartPlayerLevel)"
   conf_set "$M" StartPlayerLevel "$ANSWER"
 
+  # The realm address may have moved just now, and the client follows it.
+  sync_client_realmlist
   if (( ${#CHANGES[@]} )); then
     printf '%s\n' "$GUT"
     local c; for c in "${CHANGES[@]}"; do
@@ -985,6 +1043,9 @@ ${C_BOLD}Modes:${C_RST}
                  mangosd in the foreground as the server console
                  (Ctrl+C stops it); optional [level] is the mangosd
                  console log level, 0 (quiet) to 3 (debug)
+  ${C_GREEN}account${C_RST}        create a game master account and log in as yourself
+                 instead of the repack's shared ADMIN. Offered once at the
+                 end of setup; this runs it again whenever you want.
   ${C_GREEN}interactive${C_RST}    guided setup screen for the most common options:
                  realm name, LAN play, game type, XP/drop/honor rates,
                  MOTD, player limit, starting level.
@@ -1009,8 +1070,9 @@ ${C_BOLD}Files:${C_RST}
   server/bin/rate.conf       Turtle's per-level-bracket kill XP tuning
   server/README.linux.md     day-to-day operation guide
 
-First boot: log in with admin / admin and create your own account from the
-world console. See README.md for what to download before the first run.
+First boot: setup offers you a game master account of your own, and points
+client/realmlist.wtf at this realm. Run '$0 account' to make another.
+See README.md for what to download before the first run.
 
 EOF
 }
@@ -1025,12 +1087,21 @@ case "$mode" in
   setup|all)
     check_deps; ensure_repack; ensure_mapdata; ensure_source; ensure_ace
     ensure_binaries; fix_configs; fix_client; ensure_database; ensure_migrations
+    sync_client_realmlist
+    # Only worth asking where someone is there to answer, and only until they
+    # have an account of their own.
+    if [[ -t 0 ]] && ! has_own_gm; then make_gm_account; fi
     say "conversion complete"
     say "customize the server anytime with: $0 interactive"
     if [[ "$mode" == all ]]; then run_all "${@:2}"; fi
     ;;
   run) check_deps; run_all "${@:2}" ;;
   interactive) check_deps; ensure_repack; interactive_config ;;
+  account)
+    check_deps; resolve_db_port; start_native_db; ensure_db_credentials; assert_own_database
+    DB -N -e "SELECT 1 FROM turtle_logon.account LIMIT 1" >/dev/null 2>&1 \
+      || die "the game databases are not seeded yet; run: $0 setup"
+    make_gm_account ;;
   update) check_deps; update_all ;;
   deps)
     case "${2:-}" in
