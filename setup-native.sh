@@ -1017,12 +1017,17 @@ run_all() {
 
   say "starting mangosd in the foreground; this terminal is the server console"
   say "first boot loads all maps and takes a few minutes; stop with Ctrl+C"
-  trap 'warn "world server stopped; realmd and MariaDB are still running.
-  Stop them with: pkill -INT -f \"realmd -c\"; mariadb-admin --socket=$SERVER/db/mysql.sock -u $TWOW_DB_USER -p$TWOW_DB_PASS shutdown"' EXIT
   [[ -x "$SERVER/3-world-server.sh" ]] \
     || die "$SERVER/3-world-server.sh is missing or not executable;
   restore it (chmod +x) or start manually: cd $SERVER/bin && ./mangosd -c mangosd.conf"
-  exec "$SERVER/3-world-server.sh" "$@"
+  # Called rather than exec'd, and the note printed after it rather than from an
+  # EXIT trap: exec replaces this shell outright, so a trap set here would never
+  # run and nothing would say what was left behind.
+  local rc=0
+  "$SERVER/3-world-server.sh" "$@" || rc=$?
+  warn "world server stopped; realmd and MariaDB are still running.
+  Stop them with: pkill -INT -f \"realmd -c\"; mariadb-admin --socket=$SERVER/db/mysql.sock -u $TWOW_DB_USER -p$TWOW_DB_PASS shutdown"
+  return $rc
 }
 
 # -----------------------------------------------------------------------------
