@@ -1081,6 +1081,61 @@ update_all() {
 }
 
 # -----------------------------------------------------------------------------
+# backups of what cannot be rebuilt
+# -----------------------------------------------------------------------------
+# turtle_world is rebuilt from the repack and the migrations, and turtle_logs is
+# a record of what happened. Characters and accounts are neither: nothing here
+# can recreate them, so they are what gets backed up. update mode already dumps
+# turtle_world before touching its schema, which is a different job from this.
+BACKUP_KEEP=${TWOW_BACKUP_KEEP:-10}
+BACKUP_DBS=(turtle_char turtle_logon)
+
+backup_all() {
+  local dir="$SERVER/backups" stamp f
+  mkdir -p "$dir"
+  stamp=$(date +%Y%m%d-%H%M%S)
+  # A dump taken while the world is running can catch a character mid-save.
+  # --single-transaction gives InnoDB a consistent view without locking players
+  # out, so this is safe to run on a live server.
+  for f in "${BACKUP_DBS[@]}"; do
+    say "backing up $f"
+    mariadb-dump -h "$TWOW_DB_HOST" -P "$TWOW_DB_PORT" -u "$TWOW_DB_USER" -p"$TWOW_DB_PASS" \
+        --single-transaction --routines --triggers "$f" 2>/dev/null | gzip > "$dir/$f-$stamp.sql.gz"
+    # The dump is piped, so its own status is what matters, not gzip's.
+    (( PIPESTATUS[0] == 0 )) || { rm -f "$dir/$f-$stamp.sql.gz"; die "dumping $f failed; nothing was written"; }
+    say "  ${dir#"$ROOT"/}/$f-$stamp.sql.gz ($(du -h "$dir/$f-$stamp.sql.gz" | cut -f1))"
+  done
+  # Oldest first, keeping the newest BACKUP_KEEP of each database.
+  local old
+  for f in "${BACKUP_DBS[@]}"; do
+    mapfile -t old < <(ls -1t "$dir/$f-"*.sql.gz 2>/dev/null | tail -n +$((BACKUP_KEEP + 1)))
+    ((${#old[@]})) && { rm -f "${old[@]}"; say "pruned ${#old[@]} old $f backup(s), keeping $BACKUP_KEEP"; }
+  done
+  return 0
+}
+
+# Restoring overwrites live characters, so it refuses while the world is up and
+# says plainly what it is about to replace.
+restore_backup() {  # $1 path to a .sql.gz written by backup_all
+  local file=$1 db
+  [[ -f "$file" ]] || die "no such backup: $file
+  Available: ls ${SERVER#"$ROOT"/}/backups/"
+  db=${file##*/}; db=${db%%-*}
+  case "$db" in
+    turtle_char|turtle_logon) ;;
+    *) die "'$file' does not look like a backup of turtle_char or turtle_logon";;
+  esac
+  world_running && die "the world server is running; stop it first: $0 stop
+  Restoring under a live server would be overwritten by the next character save."
+  warn "about to replace everything in $db with the contents of ${file##*/}"
+  ui_select "This cannot be undone. Continue?" 1 "Yes, restore it" "No, stop here"
+  (( ANSWER == 0 )) || { say "nothing restored"; return 0; }
+  gzip -dc "$file" | DB "$db" || die "restore failed; $db may be half-written.
+  Try another backup, or reseed with: $0 setup"
+  say "$db restored from ${file##*/}"
+}
+
+# -----------------------------------------------------------------------------
 # What is running, and stopping it
 # -----------------------------------------------------------------------------
 status_all() {
@@ -1215,6 +1270,13 @@ ${C_BOLD}Modes:${C_RST}
                  what this system needs, what is already there, and the
                  one command that installs the rest; --packages prints
                  the bare list (setup-vm.sh provisions its guest with it)
+  ${C_GREEN}backup${C_RST} [--restore <file>]
+                 dump characters and accounts into server/backups, keeping
+                 the newest ${C_DIM}TWOW_BACKUP_KEEP${C_RST} of each (default 10). Safe to run
+                 while the server is up. --restore puts one back, which
+                 refuses while the world is running.
+                 ${C_DIM}turtle_world is not backed up here: setup and update
+                 rebuild it. Characters and accounts cannot be rebuilt.${C_RST}
   ${C_GREEN}status${C_RST}         what is running: database, realmd, world, and their ports
   ${C_GREEN}stop${C_RST}           stop the world, then realmd, then the database, in that
                  order; safe to run when some of them are already down
@@ -1296,6 +1358,14 @@ case "$mode" in
     say "restart the server to apply: $0 run" ;;
   status) status_all ;;
   stop)   stop_all ;;
+  backup)
+    check_deps; resolve_db_port; start_native_db; ensure_db_credentials; assert_own_database
+    case "${2:-}" in
+      "")        backup_all ;;
+      --restore) [[ -n "${3:-}" ]] || die "usage: $0 backup --restore <file.sql.gz>"
+                 restore_backup "$3" ;;
+      *)         die "unknown option '$2'; backup takes --restore <file> or nothing" ;;
+    esac ;;
   update) check_deps; update_all ;;
   deps)
     case "${2:-}" in
