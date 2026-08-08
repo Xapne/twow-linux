@@ -778,18 +778,36 @@ ensure_database() {
   mariadb-admin -h 127.0.0.1 -P "$seedport" -u root -p"$TWOW_SEED_PASS" --skip-ssl shutdown || true
   say "importing the seed dump into native MariaDB"
   DB < "$SERVER/logs/seed-dump.sql" || die "import of the seed dump failed"
-  # The dump records the honor maintenance week of the machine it was made on,
-  # which is months old by the time anyone installs from it. The core compares
-  # that date against today, finds it long past, and schedules a restart 15
-  # minutes into a server that has never run. A server with no history has no
-  # maintenance day, so the record is cleared rather than guessed at: the core
-  # fills both dates in itself on first boot, in HonorMaintenancer::Initialize.
-  # This runs in the seeding branch alone, so an existing database is never
-  # touched by it.
+}
+
+# -----------------------------------------------------------------------------
+# honor maintenance date left behind by whoever made the dump
+# -----------------------------------------------------------------------------
+# saved_variables records the PvP maintenance week of the machine a database
+# came from, and the repack's dump is months old by the time anyone installs
+# from it. The core compares that date with today, finds it long past, and
+# schedules a restart into a server that has only just started. Worse, it moves
+# the record on by a single week per restart (HonorMgr.cpp, DoMaintenance ends
+# with SetMaintenanceDays(GetNextMaintenanceDay())), so a month-old date costs a
+# month of restarts before it catches up.
+#
+# Only a date already more than a week stale is touched. A server that is
+# running normally always has its next day ahead of today, and one that was off
+# over its maintenance day has a genuinely due restart worth keeping, so
+# neither is disturbed. The record is cleared rather than guessed at: with no
+# last day set, HonorMaintenancer::Initialize works both dates out itself from
+# the core's own maintenance weekday.
+fix_stale_maintenance() {
+  local next today
+  next=$(DB -N -B -e "SELECT nextHonorMaintenanceDay FROM turtle_char.saved_variables" 2>/dev/null) || return 0
+  [[ "$next" =~ ^[0-9]+$ ]] || return 0
+  today=$(( $(date +%s) / 86400 ))
+  (( next > 0 && next < today - 7 )) || return 0
   DB turtle_char -e "UPDATE saved_variables SET lastHonorMaintenanceDay = 0,
                        nextHonorMaintenanceDay = 0, honorMaintenanceMarker = 0" 2>/dev/null \
-    || warn "could not clear the seeded honor maintenance dates; the server may
-  announce a restart shortly after its first start, which is harmless."
+    && say "honor maintenance date was $(( today - next )) days stale; cleared, the core sets its own on this start" \
+    || warn "could not clear a stale honor maintenance date; the server may announce
+  a restart shortly after starting, and will not come back on its own."
 }
 
 # -----------------------------------------------------------------------------
@@ -1028,6 +1046,10 @@ run_all() {
   [[ -x "$SERVER/bin/mangosd" ]] || die "no native binaries yet; run: $0 setup"
   start_native_db
   say "MariaDB ready on $TWOW_DB_HOST:$TWOW_DB_PORT"
+  # Checked at every start rather than at seeding alone: a database restored
+  # from any older backup carries the same stale date, and so does one seeded
+  # before this check existed.
+  fix_stale_maintenance
 
   if ! ss -tln | grep -q ':3724 '; then
     ( cd "$SERVER/bin" && nohup ./realmd -c realmd.conf > "$SERVER/logs/realmd.out" 2>&1 & )
