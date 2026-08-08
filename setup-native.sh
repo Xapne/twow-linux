@@ -362,8 +362,11 @@ fix_configs() {
   # library use the distro's default socket path instead of ours, and 3306 is
   # not necessarily where we ended up, so rewrite host and port on every
   # connection string while leaving the user, password and database alone.
+  # The two files spell the key differently: realmd.conf has LoginDatabaseInfo,
+  # mangosd.conf has WorldDatabase.Info, so the dot is optional. Missing it
+  # leaves mangosd pointed at 3306, where a distro MariaDB answers and refuses.
   for f in "$SERVER/bin/realmd.conf" "$SERVER/bin/mangosd.conf"; do
-    sed -i -E "s@^([[:space:]]*(Login|World|Character|Logs)DatabaseInfo[[:space:]]*=[[:space:]]*\")[^;\"]*;[^;\"]*;@\1$TWOW_DB_HOST;$TWOW_DB_PORT;@" "$f"
+    sed -i -E "s@^([[:space:]]*(Login|World|Character|Logs)Database\.?Info[[:space:]]*=[[:space:]]*\")[^;\"]*;[^;\"]*;@\1$TWOW_DB_HOST;$TWOW_DB_PORT;@" "$f"
   done
   sed -i 's|^DataDir = "\.\./Data"|DataDir = "../data"|' "$SERVER/bin/mangosd.conf"
   write_db_env
