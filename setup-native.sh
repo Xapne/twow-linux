@@ -10,6 +10,7 @@
 #   src/      Penqle/tortoise-wow source, branch 1181dev
 #   build/    native build tree
 #   deps/     locally built ACE library
+#   lib/      terminal prompts shared with setup-vm.sh
 #
 # Usage: ./setup-native.sh help
 # =============================================================================
@@ -17,6 +18,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVER="$ROOT/server"
+# shellcheck source=lib/ui.sh
+. "$ROOT/lib/ui.sh"
 # The TWOW_ prefix avoids collision with a bare DB_HOST/DB_PORT/DB_USER already
 # present in the environment. db.env is written in ${VAR:-default} form so
 # environment values take precedence over it; an empty port is resolved below.
@@ -465,77 +468,9 @@ ensure_migrations() {
 # Interactive mode: a guided, clack-style prompt for the most common options.
 # Text fields come pre-filled with the current value (Enter keeps it), lists
 # are picked with the arrow keys. Nothing is written unless a value changed.
+# The prompts themselves live in lib/ui.sh, shared with setup-vm.sh.
 # -----------------------------------------------------------------------------
-C_CYAN=$'\033[36m' C_GREEN=$'\033[32m' C_YELLOW=$'\033[33m'
-C_GRAY=$'\033[90m' C_DIM=$'\033[2m' C_BOLD=$'\033[1m' C_RST=$'\033[0m'
-GUT="${C_GRAY}│${C_RST}"
 CHANGES=()
-
-ui_banner() {
-  printf '\n%s\n' "${C_GRAY}╭────────────────────────────────────────────────╮${C_RST}"
-  printf '%s\n'   "${C_GRAY}│${C_RST}  ${C_BOLD}${C_CYAN}apne's all-in-one CLI${C_RST} for TurtleWoW on Linux   ${C_GRAY}│${C_RST}"
-  printf '%s\n'   "${C_GRAY}╰────────────────────────────────────────────────╯${C_RST}"
-}
-ui_intro() { printf '%s\n%s\n' "${C_GRAY}┌${C_RST}  ${C_BOLD}$1${C_RST}" "$GUT"; }
-ui_note()  { printf '%s  %s\n' "$GUT" "${C_DIM}$1${C_RST}"; }
-ui_warn()  { printf '%s  %s\n' "$GUT" "${C_YELLOW}$1${C_RST}"; }
-ui_outro() { printf '%s\n%s\n\n' "$GUT" "${C_GRAY}└${C_RST}  $1"; }
-
-ui_text() {  # $1 label, $2 current value -> ANSWER (Enter keeps current)
-  if [[ ! -t 0 ]]; then
-    IFS= read -r ANSWER || ANSWER=""
-    [[ -n "$ANSWER" ]] || ANSWER="$2"
-  else
-    printf '%s  %s\n' "${C_CYAN}◆${C_RST}" "$1"
-    IFS= read -rep '│  ' -i "$2" ANSWER || ANSWER="$2"
-    [[ -n "$ANSWER" ]] || ANSWER="$2"
-    printf '\033[2A\r'
-  fi
-  printf '\033[2K%s  %s\n\033[2K%s  %s\n' \
-    "${C_GREEN}◇${C_RST}" "$1" "$GUT" "${C_DIM}$ANSWER${C_RST}"
-}
-
-ui_num() {  # like ui_text but keeps asking until ANSWER is a number
-  while :; do
-    ui_text "$1" "$2"
-    [[ "$ANSWER" =~ ^[0-9]+([.][0-9]+)?$ ]] && return 0
-    ui_warn "that is not a number, try again"
-  done
-}
-
-ui_select() {  # $1 label, $2 default index, $3.. options -> ANSWER = index
-  local label="$1" idx="$2"; shift 2
-  local opts=("$@") n=$# key rest i
-  if [[ ! -t 0 ]]; then
-    IFS= read -r key || key=""
-    [[ "$key" =~ ^[0-9]+$ && "$key" -lt "$n" ]] && idx="$key"
-  else
-    printf '\033[?25l%s  %s\n' "${C_CYAN}◆${C_RST}" "$label"
-    while :; do
-      for i in "${!opts[@]}"; do
-        if (( i == idx )); then
-          printf '\033[2K%s  %s %s\n' "${C_CYAN}│${C_RST}" "${C_GREEN}●${C_RST}" "${opts[i]}"
-        else
-          printf '\033[2K%s  %s %s\n' "$GUT" "${C_GRAY}○${C_RST}" "${C_DIM}${opts[i]}${C_RST}"
-        fi
-      done
-      IFS= read -rsn1 key || key=""
-      if [[ "$key" == $'\x1b' ]]; then
-        rest=""; IFS= read -rsn2 -t 0.05 rest || true; key+="$rest"
-      fi
-      case "$key" in
-        $'\x1b[A'|k) idx=$(( (idx + n - 1) % n )) ;;
-        $'\x1b[B'|j) idx=$(( (idx + 1) % n )) ;;
-        '') break ;;
-      esac
-      printf '\033[%dA' "$n"
-    done
-    printf '\033[%dA\r' $(( n + 1 ))
-  fi
-  ANSWER="$idx"
-  printf '\033[2K%s  %s\n\033[2K%s  %s\n\033[0J\033[?25h' \
-    "${C_GREEN}◇${C_RST}" "$label" "$GUT" "${C_DIM}${opts[idx]}${C_RST}"
-}
 
 conf_get() {  # $1 file, $2 key -> value, quotes and CR stripped
   sed -n "s/^${2//./\\.}[[:space:]]*=[[:space:]]*//p" "$1" \
@@ -571,7 +506,7 @@ interactive_config() {
     fi
   fi
 
-  ui_banner
+  ui_banner "apne's all-in-one CLI" "for TurtleWoW on Linux"
   ui_intro "server configuration"
   ui_note "Enter keeps the shown value · pick from lists with ↑/↓ + Enter · Ctrl+C quits"
 

@@ -31,62 +31,16 @@ KIT_REPO=https://github.com/Xapne/twow-linux.git
 # on-screen form of the work dir: never print the expanded home directory
 WD="${WORKDIR/#$HOME/\~}"
 
-# --- looks: same palette and gutter language as setup-native.sh -------------
-C_RST=$'\033[0m' C_BOLD=$'\033[1m' C_DIM=$'\033[2m'
-C_GREEN=$'\033[1;32m' C_YELLOW=$'\033[1;33m' C_RED=$'\033[1;31m'
-C_CYAN=$'\033[1;36m' C_GRAY=$'\033[90m'
-GUT="${C_GRAY}│${C_RST}"
+# --- looks and prompts: shared with setup-native.sh, see lib/ui.sh ----------
+# shellcheck source=lib/ui.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/ui.sh"
 
+# Log helpers stay here: setup-native.sh prints "[setup]" lines that convert()
+# parses for the progress bar, so the two scripts speak differently on purpose.
 say()  { printf '%s\n%s  %s\n' "$GUT" "${C_GREEN}◇${C_RST}" "$*"; }
 note() { printf '%s  %s\n' "$GUT" "${C_DIM}$*${C_RST}"; }
 warn() { printf '%s  %s\n' "$GUT" "${C_YELLOW}$*${C_RST}"; }
 die()  { printf '%s\n%s  %s\n' "$GUT" "${C_RED}✖${C_RST}" "$*" >&2; exit 1; }
-
-ui_intro() { printf '%s\n%s\n' "${C_GRAY}┌${C_RST}  ${C_BOLD}$1${C_RST}" "$GUT"; }
-ui_outro() { printf '%s\n%s\n\n' "$GUT" "${C_GRAY}└${C_RST}  $1"; }
-
-ui_banner() {
-  printf '\n%s\n' "${C_GRAY}┌──────────────────────────────────────────────────┐${C_RST}"
-  printf '%s\n' "${C_GRAY}│${C_RST}  ${C_BOLD}${C_CYAN}apne's vm deployer${C_RST}${C_BOLD} for TurtleWoW on Linux${C_RST}       ${C_GRAY}│${C_RST}"
-  printf '%s\n' "${C_GRAY}└──────────────────────────────────────────────────┘${C_RST}"
-}
-
-ui_text() {  # $1 label, $2 default -> ANSWER (Enter keeps default)
-  printf '%s\n%s  %s\n' "$GUT" "${C_CYAN}◆${C_RST}" "$1"
-  local ans
-  IFS= read -rep "${C_GRAY}│${C_RST}  " -i "$2" ans || ans="$2"
-  ANSWER="${ans:-$2}"
-  printf '\033[2A\r\033[2K%s  %s\n\033[2K%s  %s\n' \
-    "${C_GREEN}◇${C_RST}" "$1" "$GUT" "${C_DIM}$ANSWER${C_RST}"
-}
-
-ui_select() {  # $1 label, $2 default idx, $3.. options -> ANSWER = index
-  local label="$1" idx="$2"; shift 2
-  local opts=("$@") n=$# key rest i
-  printf '%s\n\033[?25l%s  %s\n' "$GUT" "${C_CYAN}◆${C_RST}" "$label"
-  while :; do
-    for i in "${!opts[@]}"; do
-      if (( i == idx )); then
-        printf '\033[2K%s  %s %s' "${C_CYAN}│${C_RST}" "${C_GREEN}●${C_RST}" "${opts[i]}"
-      else
-        printf '\033[2K%s  %s %s' "${C_CYAN}│${C_RST}" "${C_GRAY}○${C_RST}" "${C_DIM}${opts[i]}${C_RST}"
-      fi
-      # cursor rests at the end of the last option while waiting for keys,
-      # so the prompt is a stable line for humans and automation alike
-      (( i < n - 1 )) && printf '\n'
-    done
-    IFS= read -rsn1 key || key=""
-    if [[ "$key" == $'\x1b' ]]; then
-      IFS= read -rsn2 -t 0.05 rest || rest=""
-      case "$rest" in '[A') ((idx>0)) && ((idx--));; '[B') ((idx<n-1)) && ((idx++));; esac
-    elif [[ -z "$key" ]]; then break
-    elif [[ "$key" == $'\x03' ]]; then printf '\033[?25h\n'; exit 130
-    fi
-    printf '\r\033[%dA' $((n - 1))
-  done
-  printf '\033[?25h\n'
-  ANSWER=$idx
-}
 
 # --- smart progress bar ------------------------------------------------------
 # bar <percent> <label>  - redraws in place on one gutter line
@@ -426,7 +380,7 @@ destroy() {
 }
 
 usage() {
-  ui_banner
+  ui_banner "apne's vm deployer" "for TurtleWoW on Linux"
   cat <<EOF
 
 ${C_BOLD}Usage:${C_RST}  $0 [mode]
@@ -452,7 +406,7 @@ main() {
   case "${1:-}" in
     help|-h|--help) usage; exit 0;;
     status)  status; exit 0;;
-    destroy) ui_banner; destroy; exit 0;;
+    destroy) ui_banner "apne's vm deployer" "for TurtleWoW on Linux"; destroy; exit 0;;
     ssh)     exec ssh -t "${SSHOPTS[@]}" turtle@127.0.0.1;;
     console) exec ssh -t "${SSHOPTS[@]}" turtle@127.0.0.1 'cd twow && ./setup-native.sh run 1';;
     tune)    exec ssh -t "${SSHOPTS[@]}" turtle@127.0.0.1 'cd twow && ./setup-native.sh interactive';;
@@ -464,7 +418,7 @@ main() {
   [[ -t 0 && -t 1 ]] || die "run me in a terminal - I ask before touching your system"
 
   mkdir -p "$WORKDIR/logs"
-  ui_banner
+  ui_banner "apne's vm deployer" "for TurtleWoW on Linux"
   ui_intro "zero to world console"
   host_deps
   kvm_check
