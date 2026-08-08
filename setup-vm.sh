@@ -221,7 +221,13 @@ boot_vm() {
 # provision the guest (Debian deps + the two quirk fixes + the kit)
 # =============================================================================
 provision() {
-  if vm 'command -v ninja >/dev/null && command -v mariadbd >/dev/null && test -d twow' 2>/dev/null; then
+  # Debian keeps mariadbd in /usr/sbin, which a non-interactive ssh shell does
+  # not carry on PATH, so it is looked for there too. The kit is asked whether
+  # it still answers rather than only whether its directory exists: a directory
+  # left by an earlier run can hold a copy too old to provision from.
+  if vm 'command -v ninja >/dev/null &&
+         { command -v mariadbd >/dev/null || [ -x /usr/sbin/mariadbd ]; } &&
+         twow/setup-native.sh deps --packages >/dev/null 2>&1' 2>/dev/null; then
     say "guest already provisioned"; return
   fi
   say "provisioning the guest (apt + the kit)"
