@@ -306,7 +306,12 @@ convert() {
     sleep 3; t=$((t+3))
     # one ssh per poll, carrying the log tail AND the liveness flag together;
     # an empty poll is a transient ssh hiccup, never a verdict
-    poll=$(vm 'tail -n 30 twow/setup.log 2>/dev/null | tr -d "\r"; pgrep -f setup-native.sh >/dev/null && echo "==ALIVE==" || echo "==DEAD=="' 2>/dev/null) || poll=""
+    # The bracket keeps the pattern from matching the shell that carries it:
+    # sshd runs this very command line, "setup-native.sh" and all, so a plain
+    # pattern finds itself and the conversion always reads as alive. A compile
+    # the kernel kills for memory would then never be noticed, and this loop
+    # would spin on a stale bar instead of reporting it.
+    poll=$(vm 'tail -n 30 twow/setup.log 2>/dev/null | tr -d "\r"; pgrep -f "[s]etup-native.sh setup" >/dev/null && echo "==ALIVE==" || echo "==DEAD=="' 2>/dev/null) || poll=""
     [[ -z "$poll" ]] && continue
     if grep -q '==DEAD==' <<<"$poll"; then alive=no; else alive=yes; fi
     # '|| true': on the first polls the log can still be empty, leaving only
