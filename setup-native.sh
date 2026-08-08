@@ -20,6 +20,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVER="$ROOT/server"
 # shellcheck source=lib/ui.sh
 . "$ROOT/lib/ui.sh"
+# shellcheck source=lib/firewall.sh
+. "$ROOT/lib/firewall.sh"
 # The TWOW_ prefix avoids collision with a bare DB_HOST/DB_PORT/DB_USER already
 # present in the environment. db.env is written in ${VAR:-default} form so
 # environment values take precedence over it; an empty port is resolved below.
@@ -934,8 +936,14 @@ interactive_config() {
       [[ -n "$raddr" && "$raddr" != 127.0.0.1 ]] && lanip="$raddr"
       [[ -n "$lanip" ]] || lanip="$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+' || true)"
       ui_text "This machine's LAN IP (clients connect here)" "${lanip:-192.168.?.?}"
-      set_realm_address "$ANSWER" \
-        || ui_warn "leaving the realm address unchanged"
+      if set_realm_address "$ANSWER"; then
+        # Only now: a realm nobody outside can reach is the point of the
+        # question just answered, and a firewall is the usual reason it stays
+        # unreachable after everything here is set correctly.
+        fw_offer_ports 3724 "$(conf_get "$M" WorldServerPort)"
+      else
+        ui_warn "leaving the realm address unchanged"
+      fi
     else
       set_realm_address 127.0.0.1
     fi

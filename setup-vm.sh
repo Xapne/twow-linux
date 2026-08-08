@@ -47,6 +47,8 @@ REGISTRY="${XDG_STATE_HOME:-$HOME/.local/state}/twow-vm/workdirs"
 # --- looks and prompts: shared with setup-native.sh, see lib/ui.sh ----------
 # shellcheck source=lib/ui.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib/ui.sh"
+# shellcheck source=lib/firewall.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/firewall.sh"
 
 # Log helpers stay here: setup-native.sh prints "[setup]" lines that convert()
 # parses for the progress bar, so the two scripts speak differently on purpose.
@@ -413,7 +415,10 @@ open_forwards() {
     || { warn "could not set the realm address; '$0 tune' does it interactively"; return 0; }
   if [[ -n "$lanip" ]]; then
     say "realm reachable from this host and the LAN: set realmlist $lanip"
-    note "if a firewall runs here, open tcp $REALM_PORT and $WORLD_PORT"
+    # The firewall that matters is this host's, not the guest's: clients reach
+    # the forwards here, and the guest never sees a packet that was dropped
+    # upstream of them.
+    fw_offer_ports "$REALM_PORT" "$WORLD_PORT"
   else
     say "no LAN address detected - realm stays at 127.0.0.1 (this host only)"
   fi
