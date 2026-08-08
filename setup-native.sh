@@ -939,7 +939,7 @@ interactive_config() {
     local c; for c in "${CHANGES[@]}"; do
       printf '%s  %s %s\n' "$GUT" "${C_GREEN}✔${C_RST}" "$c"
     done
-    ui_outro "saved — restart the server ('$0 run') to apply"
+    ui_outro "saved - restart the server ('$0 run') to apply"
   else
     ui_outro "nothing changed"
   fi
