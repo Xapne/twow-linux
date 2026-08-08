@@ -7,11 +7,14 @@ Everything server-side runs natively. No Wine in the server stack.
   distribution where a recent enough version is packaged, and otherwise built
   into `../deps/ACE_wrappers`.
 - Database: system MariaDB binary with a project-local data directory in
-  `db/`, config in `my.cnf` (127.0.0.1, root/mangos). The port is normally 3306;
-  the next free one is used when a distro MariaDB service already holds it, and
-  the value in use is recorded in `db.env`, which the scripts here read. That
-  file is part of the install and should not be deleted: without it a stopped
-  database may be brought back on a different port.
+  `db/`, config in `my.cnf` (127.0.0.1, root/mangos). The port is 3306 where it
+  is free and the next one up where a distro MariaDB service already holds it
+  (Debian and Ubuntu start one on install), and the value in use is recorded in
+  `db.env`, which the scripts here read. That file is part of the install and
+  should not be deleted: without it a stopped database may be brought back on a
+  different port. Note that a bare `mariadb` in a shell reaches 3306, which is
+  the distro's own server rather than this one whenever the two coexist; the
+  helper scripts here always use the port from `db.env`.
 - The Windows leftovers (`*.bat`, `bin/*.exe`, `bin/*.dll`,
   `mariadb-10.3.39-winx64/`) are unused. The original database snapshot is still
   held in the old Windows MariaDB data directory, which should be retained until

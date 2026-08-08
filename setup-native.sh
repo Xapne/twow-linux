@@ -312,8 +312,8 @@ port_free() {
 
 # On Debian and Ubuntu the packaged mariadb is started on 3306 as soon as it is
 # installed, so that port is frequently unavailable; a free one is picked
-# instead of requiring the system service to be disabled. 3307 is reserved for
-# the wine seeding instance further down.
+# instead of requiring the system service to be disabled. 3307 is left for the
+# wine seeding instance further down, which picks its own free port too.
 resolve_db_port() {
   [[ -n "$TWOW_DB_PORT" ]] && return 0
   local p
@@ -325,7 +325,11 @@ resolve_db_port() {
     port_free "$p" || continue
     TWOW_DB_PORT="$p"
     [[ "$p" == 3306 ]] || warn "port 3306 is in use by something else (a system mariadb/mysql service?);
-  using port $p for this server's own database instead"
+  using port $p for this server's own database instead. Note that a bare
+  'mariadb' in a shell still reaches 3306, not this server's database; see
+  server/db.env for the port in use. To hand 3306 back to this server, stop
+  the other one (Debian/Ubuntu: sudo systemctl disable --now mariadb) and
+  re-run this script."
     return 0
   done
   die "no free port for the database between 3306 and 3312.
@@ -431,26 +435,31 @@ ensure_database() {
   fi
 
   # Seed: dump the four preloaded DBs out of the bundled Windows MariaDB.
-  # One-time only; needs wine. Runs on port 3307 so it cannot clash.
+  # One-time only; needs wine.
   command -v wine >/dev/null 2>&1 \
     || die "game databases are empty and seeding them needs wine once ($INSTALL $PKG_WINE).
   Alternative: import dumps you already have into $TWOW_DB_HOST:$TWOW_DB_PORT."
   local windb="$SERVER/mariadb-10.3.39-winx64"
   [[ -d "$windb/data/turtle_logon" ]] \
     || die "bundled Windows MariaDB data not found in $windb; cannot seed the databases."
+  # 3307 by habit, but it is only borrowed for a minute and anything may hold it.
+  local sp seedport=""
+  for sp in 3307 3313 3314 3315; do port_free "$sp" && { seedport=$sp; break; }; done
+  [[ -n "$seedport" ]] \
+    || die "no free port for the one-time seeding instance (tried 3307 and 3313-3315)."
   say "seeding databases from the bundled Windows MariaDB (via wine, one time)"
-  ( cd "$windb/bin" && nohup wine mysqld.exe --console --port=3307 \
+  ( cd "$windb/bin" && nohup wine mysqld.exe --console --port="$seedport" \
       > "$SERVER/logs/wine-mysql.out" 2>&1 & )
   local i; for i in $(seq 1 60); do
-    mariadb -h 127.0.0.1 -P 3307 -u root -p"$TWOW_DB_PASS" --skip-ssl -e "SELECT 1" >/dev/null 2>&1 && break
+    mariadb -h 127.0.0.1 -P "$seedport" -u root -p"$TWOW_DB_PASS" --skip-ssl -e "SELECT 1" >/dev/null 2>&1 && break
     sleep 2
   done
-  mariadb -h 127.0.0.1 -P 3307 -u root -p"$TWOW_DB_PASS" --skip-ssl -e "SELECT 1" >/dev/null 2>&1 \
+  mariadb -h 127.0.0.1 -P "$seedport" -u root -p"$TWOW_DB_PASS" --skip-ssl -e "SELECT 1" >/dev/null 2>&1 \
     || die "wine MariaDB did not come up, see $SERVER/logs/wine-mysql.out"
-  mariadb-dump -h 127.0.0.1 -P 3307 -u root -p"$TWOW_DB_PASS" --skip-ssl --routines --triggers \
+  mariadb-dump -h 127.0.0.1 -P "$seedport" -u root -p"$TWOW_DB_PASS" --skip-ssl --routines --triggers \
     --databases turtle_logon turtle_char turtle_logs turtle_world > "$SERVER/logs/seed-dump.sql" \
     || die "dumping from the wine MariaDB failed"
-  mariadb-admin -h 127.0.0.1 -P 3307 -u root -p"$TWOW_DB_PASS" --skip-ssl shutdown || true
+  mariadb-admin -h 127.0.0.1 -P "$seedport" -u root -p"$TWOW_DB_PASS" --skip-ssl shutdown || true
   say "importing the seed dump into native MariaDB"
   DB < "$SERVER/logs/seed-dump.sql" || die "import of the seed dump failed"
 }
@@ -723,8 +732,10 @@ ${C_BOLD}Modes:${C_RST}
   ${C_GREEN}interactive${C_RST}    guided setup screen for the most common options:
                  realm name, LAN play, game type, XP/drop/honor rates,
                  MOTD, player limit, starting level.
-                 ${C_DIM}Configuration only: converts, builds and starts
-                 nothing. Restart the server afterwards to apply.${C_RST}
+                 ${C_DIM}Configuration only: builds and starts nothing, though
+                 it does unpack the repack when that has not happened
+                 yet, since the settings live in it. Restart the server
+                 afterwards to apply.${C_RST}
   ${C_GREEN}update${C_RST}         after upstream changes: pull the latest 1181dev source,
                  rebuild only what changed, back up the world database,
                  then apply any new schema migrations.

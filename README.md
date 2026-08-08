@@ -9,6 +9,11 @@ Works on any Linux distro: the dependency check names the right packages
 for Debian/Ubuntu, Fedora, openSUSE and Arch, and finds the MariaDB daemon
 wherever your distro keeps it. Tested on Arch and Debian 13.
 
+A Debian or Ubuntu box starts its packaged MariaDB on 3306 as soon as it is
+installed. This server notices, takes the next free port for its own database,
+and writes the port it settled on to `server/db.env`. Free 3306 up beforehand
+if you would rather the game have it.
+
 ## What you need
 
 Get these from the TurtleWoW preservation community (see the setup guide or
