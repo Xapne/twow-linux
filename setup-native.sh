@@ -30,6 +30,10 @@ TWOW_DB_PORT=${TWOW_DB_PORT:-}
 TWOW_DB_USER=${TWOW_DB_USER:-root}
 TWOW_DB_PASS=${TWOW_DB_PASS:-mangos}
 export TWOW_DB_HOST TWOW_DB_PORT TWOW_DB_USER TWOW_DB_PASS
+# Overrides the compile job count worked out below, for a machine the
+# measurement no longer fits.
+TWOW_BUILD_JOBS=${TWOW_BUILD_JOBS:-}
+export TWOW_BUILD_JOBS
 ACE_VER=8.0.3
 BRANCH=1181dev
 REPO=https://github.com/Penqle/tortoise-wow.git
@@ -320,8 +324,23 @@ system_ace() {
 CG=/sys/fs/cgroup
 MEM_PER_JOB=$(( 1 << 30 ))
 MEM_RESERVE=$(( 1 << 30 ))
+
+# The cgroup's memory ceiling in bytes, printed only where one is set. An unset
+# limit reads as "max" on v2 and as a number near INT64_MAX on v1.
+mem_limit() {
+  local mem=""
+  [[ -r $CG/memory.max ]] && mem=$(<"$CG/memory.max")
+  [[ -z $mem && -r $CG/memory/memory.limit_in_bytes ]] && mem=$(<"$CG/memory/memory.limit_in_bytes")
+  [[ $mem =~ ^[0-9]+$ ]] && ((mem < (1 << 62))) && printf '%s' "$mem"
+  return 0
+}
 build_jobs() {
   local jobs cap quota period mem
+  if [[ -n "$TWOW_BUILD_JOBS" ]]; then
+    [[ "$TWOW_BUILD_JOBS" =~ ^[1-9][0-9]*$ ]] \
+      || die "TWOW_BUILD_JOBS must be a whole number of jobs, not '$TWOW_BUILD_JOBS'."
+    printf '%s' "$TWOW_BUILD_JOBS"; return 0
+  fi
   jobs=$(nproc 2>/dev/null) || return 0
   if [[ -r $CG/cpu.max ]]; then                                   # cgroup v2
     read -r quota period < "$CG/cpu.max" || quota=max
@@ -332,16 +351,53 @@ build_jobs() {
     cap=$(( (quota + period - 1) / period ))
     ((cap > 0 && cap < jobs)) && jobs=$cap
   fi
-  mem=""
-  [[ -r $CG/memory.max ]] && mem=$(<"$CG/memory.max")
-  [[ -z $mem && -r $CG/memory/memory.limit_in_bytes ]] && mem=$(<"$CG/memory/memory.limit_in_bytes")
-  # an unset limit reads as "max" on v2 and as a number near INT64_MAX on v1
-  if [[ $mem =~ ^[0-9]+$ ]] && ((mem < (1 << 62))); then
+  mem=$(mem_limit)
+  if [[ -n $mem ]]; then
     cap=$(( (mem - MEM_RESERVE) / MEM_PER_JOB )); ((cap < 1)) && cap=1
     ((cap < jobs)) && jobs=$cap
   fi
   ((jobs < $(nproc))) && printf '%s' "$jobs"
   return 0
+}
+
+# How many times this cgroup has had a process killed for memory. Compared
+# either side of a compile, it separates a compiler the kernel shot from one
+# that found a genuine error, which read the same in ninja's output.
+oom_kills() {
+  local f
+  for f in "$CG/memory.events.local" "$CG/memory.events"; do
+    [[ -r $f ]] || continue
+    awk '$1 == "oom_kill" { print $2; hit = 1 } END { if (!hit) print 0 }' "$f"
+    return 0
+  done
+  echo 0
+}
+
+# The compile died for memory rather than for anything in the source. The
+# budget below was measured against the tree as it stood, so a heavier upstream
+# is the first thing to suspect when it no longer holds.
+die_out_of_memory() {
+  local jobs="$1" mem="${2:-}" human=""
+  [[ "$mem" =~ ^[0-9]+$ ]] && human=$(awk -v b="$mem" 'BEGIN{printf "%.1f GB", b/1073741824}')
+  die "the compiler was killed for running out of memory, not by an error in the
+  source. This ran ${jobs:-all available} job(s)${human:+ against a $human limit}.
+
+  The job count is worked out from a measurement of this source, so the usual
+  cause is that upstream has grown heavier since: a new dependency or a heavier
+  header makes each compiler need more than it used to, and the count that fit
+  before no longer does.
+
+  Retry with fewer at a time, which is the quickest thing to try:
+
+    TWOW_BUILD_JOBS=1 $0 ${mode:-setup}
+
+  Or give the machine more memory. On Proxmox that is the container's Memory
+  setting, raised from the host with:
+
+    pct set <ctid> -memory 8192
+
+  Nothing compiled so far is lost: the build resumes where it stopped, so a
+  retry only picks up the files that were still outstanding."
 }
 
 # ACE_ROOT is left unset for a packaged ACE, which is where FindACE.cmake finds
@@ -390,8 +446,11 @@ ensure_binaries() {
     || die "cmake configure failed, see $ROOT/build-configure.log"
   local jobs; jobs=$(build_jobs)
   [[ -n "$jobs" ]] && say "holding the compile to $jobs job(s) to stay inside this cgroup's limits"
-  ninja -C "$ROOT/build" ${jobs:+-j"$jobs"} mangosd realmd \
-    || die "compile failed. Scroll up for the first error; report it on the tortoise-wow GitHub."
+  local oom_before; oom_before=$(oom_kills)
+  if ! ninja -C "$ROOT/build" ${jobs:+-j"$jobs"} mangosd realmd; then
+    (( $(oom_kills) > oom_before )) && die_out_of_memory "$jobs" "$(mem_limit)"
+    die "compile failed. Scroll up for the first error; report it on the tortoise-wow GitHub."
+  fi
   install_binaries "$ROOT/build/src/mangosd/mangosd" "$ROOT/build/src/realmd/realmd"
   say "installed native mangosd and realmd"
 }
@@ -860,9 +919,13 @@ update_all() {
          -DCMAKE_BUILD_TYPE=Release -DDEBUG_SYMBOLS=OFF > "$ROOT/build-configure.log" 2>&1 \
     || die "cmake configure failed, see $ROOT/build-configure.log"
   local jobs; jobs=$(build_jobs)
-  ninja -C "$ROOT/build" ${jobs:+-j"$jobs"} mangosd realmd \
-    || die "compile failed; the installed binaries were not touched.
+  [[ -n "$jobs" ]] && say "holding the compile to $jobs job(s) to stay inside this cgroup's limits"
+  local oom_before; oom_before=$(oom_kills)
+  if ! ninja -C "$ROOT/build" ${jobs:+-j"$jobs"} mangosd realmd; then
+    (( $(oom_kills) > oom_before )) && die_out_of_memory "$jobs" "$(mem_limit)"
+    die "compile failed; the installed binaries were not touched.
   Fix the error above or report it on the tortoise-wow GitHub."
+  fi
   install_binaries "$ROOT/build/src/mangosd/mangosd" "$ROOT/build/src/realmd/realmd"
   say "installed updated binaries into server/bin/"
 
