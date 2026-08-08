@@ -29,7 +29,13 @@ TWOW_DB_HOST=${TWOW_DB_HOST:-127.0.0.1}
 TWOW_DB_PORT=${TWOW_DB_PORT:-}
 TWOW_DB_USER=${TWOW_DB_USER:-root}
 TWOW_DB_PASS=${TWOW_DB_PASS:-mangos}
-export TWOW_DB_HOST TWOW_DB_PORT TWOW_DB_USER TWOW_DB_PASS
+# The bundled Windows MariaDB is only borrowed once, to dump the game databases
+# out of, and it carries the password the repack shipped with. That is not this
+# server's password: TWOW_DB_PASS may be set to anything, and reusing it for the
+# seeding instance makes a fresh install fail at the one step a new password
+# cannot reach.
+TWOW_SEED_PASS=${TWOW_SEED_PASS:-mangos}
+export TWOW_DB_HOST TWOW_DB_PORT TWOW_DB_USER TWOW_DB_PASS TWOW_SEED_PASS
 # Overrides the compile job count worked out below, for a machine the
 # measurement no longer fits.
 TWOW_BUILD_JOBS=${TWOW_BUILD_JOBS:-}
@@ -758,15 +764,18 @@ ensure_database() {
   ( cd "$windb/bin" && nohup wine mysqld.exe --console --port="$seedport" \
       > "$SERVER/logs/wine-mysql.out" 2>&1 & )
   local i; for i in $(seq 1 60); do
-    mariadb -h 127.0.0.1 -P "$seedport" -u root -p"$TWOW_DB_PASS" --skip-ssl -e "SELECT 1" >/dev/null 2>&1 && break
+    mariadb -h 127.0.0.1 -P "$seedport" -u root -p"$TWOW_SEED_PASS" --skip-ssl -e "SELECT 1" >/dev/null 2>&1 && break
     sleep 2
   done
-  mariadb -h 127.0.0.1 -P "$seedport" -u root -p"$TWOW_DB_PASS" --skip-ssl -e "SELECT 1" >/dev/null 2>&1 \
-    || die "wine MariaDB did not come up, see $SERVER/logs/wine-mysql.out"
-  mariadb-dump -h 127.0.0.1 -P "$seedport" -u root -p"$TWOW_DB_PASS" --skip-ssl --routines --triggers \
+  mariadb -h 127.0.0.1 -P "$seedport" -u root -p"$TWOW_SEED_PASS" --skip-ssl -e "SELECT 1" >/dev/null 2>&1 \
+    || die "the bundled Windows MariaDB did not answer on port $seedport, see $SERVER/logs/wine-mysql.out
+  It is reached with the repack's own root password. If yours differs from the
+  default, give it as TWOW_SEED_PASS=... $0 ${mode:-setup} (TWOW_DB_PASS is this
+  server's password and is not used here)."
+  mariadb-dump -h 127.0.0.1 -P "$seedport" -u root -p"$TWOW_SEED_PASS" --skip-ssl --routines --triggers \
     --databases turtle_logon turtle_char turtle_logs turtle_world > "$SERVER/logs/seed-dump.sql" \
     || die "dumping from the wine MariaDB failed"
-  mariadb-admin -h 127.0.0.1 -P "$seedport" -u root -p"$TWOW_DB_PASS" --skip-ssl shutdown || true
+  mariadb-admin -h 127.0.0.1 -P "$seedport" -u root -p"$TWOW_SEED_PASS" --skip-ssl shutdown || true
   say "importing the seed dump into native MariaDB"
   DB < "$SERVER/logs/seed-dump.sql" || die "import of the seed dump failed"
 }
