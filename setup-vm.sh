@@ -257,7 +257,18 @@ elif [ -d twow ]; then
 else
   git clone -q "$KIT_REPO" twow
 fi
-sudo apt-get install -y -qq $(twow/setup-native.sh deps --packages)
+
+# A kit that predates the deps mode prints its help text on stdout instead,
+# and apt rejects the first word carrying a slash with a one-line error that
+# names neither the kit nor the reason. Check the shape before handing it over.
+pkgs=$(twow/setup-native.sh deps --packages)
+case $pkgs in
+  ""|*/*|*"
+"*) echo "deps --packages did not return a package list:" >&2
+    printf '%s\n' "$pkgs" | head -3 >&2
+    exit 1;;
+esac
+sudo apt-get install -y -qq $pkgs
 # quirk 1: Debian autostarts a system mariadb on 3306; the kit runs its own
 sudo systemctl disable --now mariadb
 GUEST
