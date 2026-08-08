@@ -7,7 +7,9 @@ the server stack. The game client still runs under Wine, as usual.
 
 Works on any Linux distro: the dependency check names the right packages
 for Debian/Ubuntu, Fedora, openSUSE and Arch, and finds the MariaDB daemon
-wherever your distro keeps it. Tested on Arch and Debian 13.
+wherever your distro keeps it. Tested on Arch, Debian 13, and Debian 12 in a
+Proxmox LXC container, where it runs as root beside the packaged MariaDB and
+sizes the compile to what the container is given.
 
 A Debian or Ubuntu box starts its packaged MariaDB on 3306 as soon as it is
 installed. This server notices, takes the next free port for its own database,
@@ -150,7 +152,7 @@ that is cosmetic.
 
 - SIGGZ (send me a link) for the repack, [Penqle](https://github.com/Penqle/) for the 1181dev source
 - [Kes](https://ko-fi.com/scribblesbykes) (NoGuiltGaming) for the Windows setup guide this follows
-- Ramach for battle-testing the setup on Debian
+- Ramach for battle-testing the setup on Debian and in a Proxmox LXC container
 - The TurtleWoW preservation [Discord](https://discord.gg/kpnCR644kk)
 
 ## Donations
