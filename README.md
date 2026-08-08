@@ -144,9 +144,11 @@ the world database, and applies any new schema migrations (stop the world
 server first). `./setup-native.sh help` shows all modes. Day-to-day
 operation is documented in `server/README.linux.md`.
 
-First boot: log in with admin / admin and create your own account from the
-world console. The realm shows OFFLINE in the realm list on local servers;
-that is cosmetic.
+First boot: setup offers to create a game master account for you, and points
+`client/realmlist.wtf` at this realm so the client reaches your server rather
+than Turtle's. `./setup-native.sh account` creates further accounts, and the
+world console takes `account create <name> <pass>` just as well. The realm
+shows OFFLINE in the realm list on local servers; that is cosmetic.
 
 ## Credits
 
