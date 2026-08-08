@@ -519,6 +519,39 @@ sync_client_realmlist() {
   say "client realmlist -> $addr (was ${cur:-unset})"
 }
 
+# Where the realm answers, written in one place. Two things have to agree: the
+# address in turtle_logon.realmlist, which is what the login server hands to a
+# client, and BindIP in both configs, which is what the server listens on. A
+# realm advertising an address it is not bound to accepts nothing.
+#
+# The bind is derived from the address, since a realm reachable from elsewhere
+# has to listen on more than the loopback, but it can be overridden because the
+# two legitimately differ behind a port forward: a VM advertises 127.0.0.1 to a
+# client on its host while having to bind 0.0.0.0, the forward arriving on the
+# guest's own address rather than its loopback.
+#
+# Prints nothing and records what changed in CHANGES, so the interactive screen
+# can summarize it and the realm mode can report in its own voice.
+# $1 address, $2 optional bind address
+set_realm_address() {
+  local addr=$1 bind=${2:-} R="$SERVER/bin/realmd.conf" M="$SERVER/bin/mangosd.conf" cur
+  [[ "$addr" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { warn "'$addr' is not an IPv4 address"; return 1; }
+  [[ -f "$R" && -f "$M" ]] || { warn "no configs in server/bin yet; run: $0 setup"; return 1; }
+  if [[ -z "$bind" ]]; then
+    bind=0.0.0.0; [[ "$addr" == 127.0.0.1 ]] && bind=127.0.0.1
+  fi
+  cur=$(DB -N -B -e "SELECT address FROM turtle_logon.realmlist ORDER BY id LIMIT 1" 2>/dev/null) || cur=""
+  if [[ "$addr" != "$cur" ]]; then
+    DB -e "UPDATE turtle_logon.realmlist SET address='$addr'" \
+      || { warn "could not write the realm address into turtle_logon.realmlist"; return 1; }
+    CHANGES+=("realm address: ${cur:-unset} -> $addr")
+  fi
+  conf_set "$R" BindIP "$bind" quote
+  conf_set "$M" BindIP "$bind" quote
+  REALM_BIND="$bind"
+  return 0
+}
+
 # The repack ships ADMIN and TEST at rank 4, so the server never lacks a game
 # master; what a new one lacks is an account belonging to whoever set it up.
 # Asking only while there is none keeps a repeated setup quiet.
@@ -881,22 +914,10 @@ interactive_config() {
       [[ -n "$raddr" && "$raddr" != 127.0.0.1 ]] && lanip="$raddr"
       [[ -n "$lanip" ]] || lanip="$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+' || true)"
       ui_text "This machine's LAN IP (clients connect here)" "${lanip:-192.168.?.?}"
-      if [[ "$ANSWER" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        if [[ "$ANSWER" != "$raddr" ]]; then
-          DB -e "UPDATE turtle_logon.realmlist SET address='$ANSWER'"
-          CHANGES+=("realm address: ${raddr:-unset} -> $ANSWER")
-        fi
-        conf_set "$R" BindIP 0.0.0.0 quote
-        conf_set "$M" BindIP 0.0.0.0 quote
-      else
-        ui_warn "not an IPv4 address, leaving the realm address unchanged"
-      fi
+      set_realm_address "$ANSWER" \
+        || ui_warn "leaving the realm address unchanged"
     else
-      if [[ "$raddr" != 127.0.0.1 ]]; then
-        DB -e "UPDATE turtle_logon.realmlist SET address='127.0.0.1'"
-        CHANGES+=("realm address: ${raddr:-unset} -> 127.0.0.1")
-      fi
-      conf_set "$R" BindIP 127.0.0.1 quote
+      set_realm_address 127.0.0.1
     fi
   else
     ui_note "realm name/address live in the database, which is not initialized yet;"
@@ -1108,6 +1129,14 @@ ${C_BOLD}Modes:${C_RST}
                  what this system needs, what is already there, and the
                  one command that installs the rest; --packages prints
                  the bare list (setup-vm.sh provisions its guest with it)
+  ${C_GREEN}realm${C_RST} <address> [--bind <address>]
+                 set what clients are told to connect to, writing both the
+                 realm address and BindIP so the two agree. 127.0.0.1 keeps
+                 the realm to this machine.
+                 ${C_DIM}--bind overrides what the server listens on, which
+                 only differs behind a port forward; setup-vm.sh passes
+                 0.0.0.0 because qemu's forwards never reach the guest's
+                 loopback.${C_RST}
   ${C_GREEN}update${C_RST}         after upstream changes: pull the latest 1181dev source,
                  rebuild only what changed, back up the world database,
                  then apply any new schema migrations.
@@ -1160,6 +1189,22 @@ case "$mode" in
       --if-none) has_own_gm && say "game master account already there" || make_gm_account ;;
       *)         die "unknown option '$2'; account takes --if-none or nothing" ;;
     esac ;;
+  realm)
+    check_deps; resolve_db_port; start_native_db; ensure_db_credentials; assert_own_database
+    [[ -n "${2:-}" ]] \
+      || die "usage: $0 realm <address> [--bind <address>]
+  <address> is what clients are told to connect to; 127.0.0.1 keeps the realm
+  to this machine. --bind overrides what the server listens on, which only
+  differs behind a port forward."
+    case "${3:-}" in
+      "")     set_realm_address "$2" || exit 1 ;;
+      --bind) [[ -n "${4:-}" ]] || die "--bind needs an address"
+              set_realm_address "$2" "$4" || exit 1 ;;
+      *)      die "unknown option '$3'; realm takes --bind <address> or nothing" ;;
+    esac
+    sync_client_realmlist
+    say "realm answers at $2, listening on ${REALM_BIND:-?}"
+    say "restart the server to apply: $0 run" ;;
   update) check_deps; update_all ;;
   deps)
     case "${2:-}" in
