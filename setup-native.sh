@@ -189,7 +189,7 @@ check_deps() {
     dep_present "$d_kind" "$d_target" && continue
     case "$d_tier" in
       required) missing+=("$d_label ($d_pkg)") ;;
-      optional) later+=("no system ACE; it gets built from source here, which costs
+      optional) ace_built || later+=("no system ACE; it gets built from source here, which costs
   a few minutes on the first run. Skip that with: $INSTALL $d_pkg") ;;
       seed)     seeded || later+=("the one-time database seed further down needs wine,
   which is missing. Install it before then: $INSTALL $d_pkg") ;;
@@ -210,6 +210,10 @@ check_deps() {
 # Whether the game databases have already been imported. InnoDB gives each
 # database a directory, so this answers without starting the server.
 seeded() { [[ -d "$SERVER/db/turtle_logon" ]]; }
+
+# A local ACE build satisfies the server just as well, so once one exists the
+# packaged ACE saves nothing and advising it would only mislead.
+ace_built() { [[ -f "$ROOT/deps/ACE_wrappers/lib/libACE.so" ]]; }
 
 # Dependency status for every tier, plus the command that installs the lot.
 deps_report() {
