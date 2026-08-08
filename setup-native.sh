@@ -1091,9 +1091,12 @@ ${C_BOLD}Modes:${C_RST}
                  mangosd in the foreground as the server console
                  (Ctrl+C stops it); optional [level] is the mangosd
                  console log level, 0 (quiet) to 3 (debug)
-  ${C_GREEN}account${C_RST}        create a game master account and log in as yourself
+  ${C_GREEN}account${C_RST} [--if-none]
+                 create a game master account and log in as yourself
                  instead of the repack's shared ADMIN. Offered once at the
                  end of setup; this runs it again whenever you want.
+                 ${C_DIM}--if-none offers only while no account of your own
+                 exists, which is what setup-vm.sh calls.${C_RST}
   ${C_GREEN}interactive${C_RST}    guided setup screen for the most common options:
                  realm name, LAN play, game type, XP/drop/honor rates,
                  MOTD, player limit, starting level.
@@ -1149,7 +1152,14 @@ case "$mode" in
     check_deps; resolve_db_port; start_native_db; ensure_db_credentials; assert_own_database
     DB -N -e "SELECT 1 FROM turtle_logon.account LIMIT 1" >/dev/null 2>&1 \
       || die "the game databases are not seeded yet; run: $0 setup"
-    make_gm_account ;;
+    # --if-none is what an installer asks for: offer once, on a server where
+    # nobody has an account of their own yet, and say nothing on a re-run.
+    # Without it the mode is the deliberate "make me another one".
+    case "${2:-}" in
+      "")        make_gm_account ;;
+      --if-none) has_own_gm && say "game master account already there" || make_gm_account ;;
+      *)         die "unknown option '$2'; account takes --if-none or nothing" ;;
+    esac ;;
   update) check_deps; update_all ;;
   deps)
     case "${2:-}" in
