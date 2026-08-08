@@ -10,6 +10,8 @@
 #   TurtleWoW_1.18.zip   you bring this (SIGGZ repack)
 #   data.zip             you bring this (pre-made map data)
 #   turtle.qcow2, seed.iso, vmkey[.pub], logs/
+#   vm.id                marks the dir as holding a VM built here, which is
+#                        what 'vms' lists and what 'destroy' is allowed to remove
 #
 # Usage: ./setup-vm.sh help
 # =============================================================================
@@ -30,6 +32,17 @@ VM_MEM="${TWOW_VM_MEM:-$(( host_mem_gb / 2 < 12 ? (host_mem_gb / 2 < 4 ? 4 : hos
 KIT_REPO=https://github.com/Xapne/twow-linux.git
 # on-screen form of the work dir: never print the expanded home directory
 WD="${WORKDIR/#$HOME/\~}"
+
+# --- VM identity --------------------------------------------------------------
+# One VM per work dir, named after a digest of that dir's path: the same
+# directory always produces the same name, and two work dirs never collide.
+# The name is handed to qemu with -name, which places it in the process list,
+# and that is what tells a VM booted from here apart from every other VM on the
+# host. The marker file records the same for a VM that is powered off, and the
+# registry remembers work dirs so they can be listed from anywhere.
+VM_NAME="twow-$(printf '%s' "$WORKDIR" | sha1sum | cut -c1-6)"
+MARKER=vm.id
+REGISTRY="${XDG_STATE_HOME:-$HOME/.local/state}/twow-vm/workdirs"
 
 # --- looks and prompts: shared with setup-native.sh, see lib/ui.sh ----------
 # shellcheck source=lib/ui.sh
@@ -177,15 +190,20 @@ make_disk() {
   say "creating $DISK_SIZE overlay disk on top of the stock image"
   qemu-img create -q -f qcow2 -b "$IMG" -F qcow2 "$WORKDIR/$DISK" "$DISK_SIZE"
   ( cd "$WORKDIR" && qemu-img rebase -u -b "$IMG" -F qcow2 "$DISK" 2>/dev/null || true )
+  vm_register
 }
 
 boot_vm() {
+  vm_register   # also marks work dirs that predate the marker
   if vm_up; then say "VM already running"; return; fi
   for p in "$SSH_PORT" "$REALM_PORT" "$WORLD_PORT"; do
     ss -tln | grep -q ":$p " && die "port $p is already in use on this host - something else is running there"
   done
-  say "booting the VM headless ($VM_CPUS cores, $VM_MEM, ports $SSH_PORT/$REALM_PORT/$WORLD_PORT)"
+  say "booting the VM headless as $VM_NAME ($VM_CPUS cores, $VM_MEM, ports $SSH_PORT/$REALM_PORT/$WORLD_PORT)"
+  # -name puts the identity in the process list, which is how this VM is found
+  # again later without matching on a disk filename every work dir shares.
   ( cd "$WORKDIR" && qemu-system-x86_64 -enable-kvm -cpu host -smp "$VM_CPUS" -m "$VM_MEM" \
+      -name "$VM_NAME" \
       -drive file="$DISK",if=virtio \
       -drive file=seed.iso,media=cdrom \
       -nic user,model=virtio-net-pci,hostfwd=tcp::"$SSH_PORT"-:22,hostfwd=tcp::"$REALM_PORT"-:3724,hostfwd=tcp::"$WORLD_PORT"-:"$WORLD_PORT" \
@@ -369,14 +387,234 @@ status() {
   ui_outro "work dir: $WD"
 }
 
+# =============================================================================
+# discovering VMs: this script's, and everyone else's
+# =============================================================================
+# Ownership is proved by the marker file, never by a filename: every work dir
+# calls its disk turtle.qcow2, so matching on that would sweep up a second VM
+# from here and any unrelated qemu process that happens to mention it.
+vm_register() {
+  mkdir -p "$(dirname "$REGISTRY")"
+  cat > "$WORKDIR/$MARKER" <<EOF
+# Written by setup-vm.sh. Its presence marks this directory as holding a VM
+# that setup-vm.sh created, and is what permits 'setup-vm.sh destroy' to
+# remove it.
+name=$VM_NAME
+disk=$DISK
+EOF
+  grep -qxF "$WORKDIR" "$REGISTRY" 2>/dev/null || printf '%s\n' "$WORKDIR" >> "$REGISTRY"
+}
+
+# Work dirs holding a VM from here, with vanished ones dropped from the registry.
+vm_known_dirs() {
+  local d keep=()
+  if [[ -f "$REGISTRY" ]]; then
+    while IFS= read -r d; do
+      [[ -n "$d" && -f "$d/$MARKER" ]] || continue
+      [[ " ${keep[*]-} " == *" $d "* ]] && continue
+      keep+=("$d")
+    done < "$REGISTRY"
+  fi
+  if [[ -f "$WORKDIR/$MARKER" && " ${keep[*]-} " != *" $WORKDIR "* ]]; then
+    keep+=("$WORKDIR")
+  fi
+  if ((${#keep[@]})); then
+    mkdir -p "$(dirname "$REGISTRY")"
+    printf '%s\n' "${keep[@]}" > "$REGISTRY"
+    printf '%s\n' "${keep[@]}"
+  fi
+}
+
+vm_name_of() { { sed -n 's/^name=//p' "$1/$MARKER" 2>/dev/null || true; } | head -1; }
+
+# The qemu pid for one name, empty when that VM is not running. Absence is a
+# normal answer here, so a failed pgrep must not surface as a failed command.
+vm_pid_of() { { pgrep -f -- "-name $1( |\$)" 2>/dev/null || true; } | head -1; }
+
+# The qemu pid for a work dir. VMs booted before -name was passed carry no
+# identity in their command line, so the pidfile answers for those, checked
+# against /proc so a stale pid cannot be mistaken for a live VM.
+vm_pid_in() {
+  local d=$1 n pid=""
+  n=$(vm_name_of "$d")
+  [[ -n "$n" ]] && pid=$(vm_pid_of "$n")
+  if [[ -z "$pid" && -f "$d/qemu.pid" ]]; then
+    pid=$(cat "$d/qemu.pid" 2>/dev/null || true)
+    if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null \
+       || ! grep -qa qemu "/proc/$pid/cmdline" 2>/dev/null; then
+      pid=""
+    fi
+  fi
+  printf '%s' "$pid"
+}
+
+# Work dirs built before the marker existed. The overlay disk beside this
+# script's own ssh key is a combination nothing else leaves behind, so such a
+# directory is adopted rather than reported as belonging to someone else.
+vm_adopt_legacy() {
+  [[ -f "$WORKDIR/$MARKER" ]] && return 0
+  [[ -f "$WORKDIR/$DISK" && -f "$WORKDIR/vmkey" ]] || return 0
+  vm_register
+  note "adopted the VM already in $WD"
+}
+
+# Everything else running under qemu on this host. Read-only, and listed purely
+# so it is visible that these stay untouched.
+vm_foreign() {
+  pgrep -af 'qemu-system' 2>/dev/null | grep -v -- '-name twow-' || true
+}
+
+vm_libvirt() {
+  command -v virsh >/dev/null 2>&1 || return 0
+  timeout 2 virsh list --all --name 2>/dev/null | sed '/^$/d' || true
+}
+
+vms() {
+  ui_intro "virtual machines on this host"
+  vm_adopt_legacy
+  local dirs=() d n pid state disk sz count=0 ours=" "
+  mapfile -t dirs < <(vm_known_dirs)
+  if ((${#dirs[@]})); then
+    note "created by this script - '$0 destroy' can remove these:"
+    for d in "${dirs[@]}"; do
+      n=$(vm_name_of "$d"); pid=$(vm_pid_in "$d")
+      state=stopped; [[ -n "$pid" ]] && { state="running"; ours+="$pid "; }
+      disk="$d/$DISK"; sz="no disk"
+      [[ -f "$disk" ]] && sz=$(du -h "$disk" 2>/dev/null | cut -f1)
+      count=$((count + 1))
+      printf '%s  %s %-14s %-9s %-6s %s\n' "$GUT" "${C_GREEN}●${C_RST}" "$n" \
+        "$state" "$sz" "${C_DIM}${d/#$HOME/\~}${C_RST}"
+    done
+  else
+    note "created by this script: none"
+  fi
+
+  # A VM booted before -name was passed is identified by its pidfile above, so
+  # its process is dropped here rather than counted a second time as a stranger.
+  local foreign=() lv=() raw=() line p
+  mapfile -t raw < <(vm_foreign)
+  for line in "${raw[@]-}"; do
+    [[ -n "$line" ]] || continue
+    p=${line%% *}
+    [[ "$ours" == *" $p "* ]] && continue
+    foreign+=("$line")
+  done
+  mapfile -t lv < <(vm_libvirt)
+  if ((${#foreign[@]})) || ((${#lv[@]})); then
+    printf '%s\n' "$GUT"
+    note "other VMs on this host - never touched by this script:"
+    for d in "${foreign[@]}"; do
+      [[ -n "$d" ]] || continue
+      printf '%s  %s %s\n' "$GUT" "${C_GRAY}○${C_RST}" "${C_DIM}qemu pid ${d%% *}${C_RST}"
+    done
+    for d in "${lv[@]}"; do
+      [[ -n "$d" ]] || continue
+      printf '%s  %s %s\n' "$GUT" "${C_GRAY}○${C_RST}" "${C_DIM}libvirt domain '$d'${C_RST}"
+    done
+  fi
+  ui_outro "$count from here, $(( ${#foreign[@]} + ${#lv[@]} )) belonging to something else"
+}
+
+# =============================================================================
+# removal
+# =============================================================================
+# Refuses any directory without the marker, and refuses $HOME and / whatever a
+# marker claims, since the deep option deletes the directory outright.
+vm_removable() {
+  local d=$1
+  [[ -f "$d/$MARKER" ]] || { warn "$d holds no VM from this script - skipped"; return 1; }
+  case "$d" in
+    "$HOME"|/|"") warn "refusing to remove $d"; return 1;;
+  esac
+  return 0
+}
+
+vm_remove() {  # $1 work dir, $2 "vm" or "all"
+  local d=$1 scope=$2 n pid
+  vm_removable "$d" || return 0
+  n=$(vm_name_of "$d"); pid=$(vm_pid_in "$d")
+  if [[ -n "$pid" ]]; then
+    say "stopping $n (pid $pid)"
+    kill "$pid" 2>/dev/null || true
+    local i; for i in $(seq 1 10); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+    kill -0 "$pid" 2>/dev/null && { kill -9 "$pid" 2>/dev/null || true; sleep 1; }
+  fi
+  if [[ "$scope" == all ]]; then
+    rm -rf "$d"
+    say "removed $n and everything in ${d/#$HOME/\~}"
+  else
+    rm -f "$d/$DISK" "$d/seed.iso" "$d/known_hosts" "$d/qemu.pid" "$d/$MARKER"
+    say "removed $n; downloads and zips kept in ${d/#$HOME/\~}"
+  fi
+  if [[ -f "$REGISTRY" ]]; then
+    grep -vxF "$d" "$REGISTRY" > "$REGISTRY.tmp" 2>/dev/null || true
+    mv -f "$REGISTRY.tmp" "$REGISTRY" 2>/dev/null || true
+  fi
+}
+
+# Speaks up only when a new VM is about to be built while older ones from this
+# script are still around, so the usual re-run in an existing work dir stays
+# silent. Old test machines otherwise sit there holding disk and memory.
+check_existing_vms() {
+  vm_adopt_legacy
+  [[ -f "$WORKDIR/$MARKER" ]] && return 0     # reusing this work dir's own VM
+  local dirs=() others=() d n
+  mapfile -t dirs < <(vm_known_dirs)
+  for d in "${dirs[@]-}"; do
+    [[ -n "$d" && "$d" != "$WORKDIR" ]] && others+=("$d")
+  done
+  ((${#others[@]})) || return 0
+
+  warn "a new VM is about to be built in $WD, and this script has ${#others[@]} already:"
+  for d in "${others[@]}"; do
+    n=$(vm_name_of "$d")
+    note "  $n  ${d/#$HOME/\~}$([[ -n "$(vm_pid_in "$d")" ]] && printf '  (running)')"
+  done
+  ui_select "How do you want to go on?" 0 \
+    "Build the new one in $WD and leave those alone" \
+    "Remove one of them first" \
+    "Stop here, change nothing"
+  case "$ANSWER" in
+    1) destroy;;
+    2) die "nothing changed. '$0 vms' lists them, '$0 destroy' removes one";;
+  esac
+}
+
 destroy() {
-  ui_select "Destroy the VM? (disk is deleted, downloads and zips are kept)" 1 "Yes, destroy it" "No"
-  (( ANSWER == 0 )) || exit 0
-  [[ -f "$WORKDIR/qemu.pid" ]] && kill "$(cat "$WORKDIR/qemu.pid")" 2>/dev/null || true
-  pkill -f "qemu-system-x86_64.*$DISK" 2>/dev/null || true
-  sleep 1
-  rm -f "$WORKDIR/$DISK" "$WORKDIR/seed.iso" "$WORKDIR/known_hosts" "$WORKDIR/qemu.pid"
-  say "gone. '$0' builds it again from the downloads"
+  local dirs=() d n pid labels=() i
+  vm_adopt_legacy
+  mapfile -t dirs < <(vm_known_dirs)
+  if ((${#dirs[@]} == 0)); then
+    ui_intro "destroy"
+    note "no VM created by this script was found"
+    ui_outro "nothing to remove"
+    return 0
+  fi
+
+  ui_intro "destroy a VM"
+  for d in "${dirs[@]}"; do
+    n=$(vm_name_of "$d"); pid=$(vm_pid_in "$d")
+    labels+=("$n  ${pid:+(running)}${pid:-(stopped)}  ${d/#$HOME/\~}")
+  done
+  labels+=("Cancel, change nothing")
+  ui_select "Which VM?" 0 "${labels[@]}"
+  i=$ANSWER
+  (( i < ${#dirs[@]} )) || { ui_outro "cancelled"; return 0; }
+  d="${dirs[$i]}"
+
+  ui_warn "this is FULLY DESTRUCTIVE: the VM is powered off and its disk deleted."
+  ui_warn "Everything inside it - the server, its database, characters - is gone,"
+  ui_warn "and none of it can be recovered."
+  ui_select "How much of ${d/#$HOME/\~} goes?" 1 \
+    "The VM only - keep the Debian image and the zips, so a rebuild is quick" \
+    "Cancel, change nothing" \
+    "Everything, the whole directory including the downloaded image and your zips"
+  case "$ANSWER" in
+    0) vm_remove "$d" vm;;
+    2) vm_remove "$d" all;;
+    *) ui_outro "cancelled"; return 0;;
+  esac
+  ui_outro "'$0' builds a fresh one whenever you want"
 }
 
 usage() {
@@ -392,7 +630,12 @@ ${C_BOLD}Modes:${C_RST}
   ${C_GREEN}tune${C_RST}       run the kit's interactive config inside the VM
   ${C_GREEN}ssh${C_RST}        plain shell inside the VM
   ${C_GREEN}status${C_RST}     what is running
-  ${C_GREEN}destroy${C_RST}    stop the VM and delete its disk (keeps downloads)
+  ${C_GREEN}vms${C_RST}        every VM this script built, running or not, and a note
+             of the VMs on this host that belong to something else
+  ${C_GREEN}destroy${C_RST}    pick one of this script's VMs and remove it
+             ${C_DIM}Fully destructive: the disk goes and the server, database
+             and characters inside it go with it. Only VMs built here
+             are ever offered.${C_RST}
   ${C_GREEN}help${C_RST}       this
 
 Bring ${C_BOLD}TurtleWoW_1.18.zip${C_RST} and ${C_BOLD}data.zip${C_RST}; everything else is automatic.
@@ -406,6 +649,7 @@ main() {
   case "${1:-}" in
     help|-h|--help) usage; exit 0;;
     status)  status; exit 0;;
+    vms)     ui_banner "apne's vm deployer" "for TurtleWoW on Linux"; vms; exit 0;;
     destroy) ui_banner "apne's vm deployer" "for TurtleWoW on Linux"; destroy; exit 0;;
     ssh)     exec ssh -t "${SSHOPTS[@]}" turtle@127.0.0.1;;
     console) exec ssh -t "${SSHOPTS[@]}" turtle@127.0.0.1 'cd twow && ./setup-native.sh run 1';;
@@ -420,6 +664,7 @@ main() {
   mkdir -p "$WORKDIR/logs"
   ui_banner "apne's vm deployer" "for TurtleWoW on Linux"
   ui_intro "zero to world console"
+  check_existing_vms
   host_deps
   kvm_check
   resource_check

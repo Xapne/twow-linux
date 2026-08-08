@@ -92,9 +92,29 @@ By default the VM gets half your RAM (4-12 GB) and up to 8 cores. Cores
 matter for the compile, nothing else. Disk size is fixed at creation:
 `destroy` and run again, or `qemu-img resize` and grow it in the guest.
 
+### Managing the VMs it builds
+
+```
+./setup-vm.sh vms          # every VM built here, running or not
+./setup-vm.sh destroy      # pick one and remove it
+```
+
+Each work dir gets one VM, named after that directory and marked with a
+`vm.id` file. `vms` lists those, and separately counts the other VMs on the
+host (libvirt domains, other qemu processes), which stay untouched.
+
+`destroy` only ever offers VMs carrying that marker, and asks twice: which one,
+then how much of it goes. It is fully destructive, and says so: the disk is
+deleted and the server, database and characters inside it go with it. The
+second question chooses between keeping the Debian image and your zips for a
+quick rebuild, or clearing the work dir out entirely.
+
+Building a new VM while older ones are still around says so first, and offers
+to remove one on the spot.
+
 Day to day: `console` reattaches the world console, `tune` opens the
-interactive config inside the VM, `ssh` gives a shell, `status` and
-`destroy` do what they say. The realm advertises your LAN address when
+interactive config inside the VM, `ssh` gives a shell, and `status` reports
+what is running. The realm advertises your LAN address when
 you have one, so clients on this host and on the local network both work
 (if a firewall runs on the host, open tcp 3724 and 8091 for LAN play).
 SSH into the VM on port 2222 (turtle / turtle). The zips can sit in
