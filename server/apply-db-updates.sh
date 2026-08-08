@@ -35,7 +35,13 @@ for f in $(ls *_world.sql | sort); do
        && sed 's/^INSERT INTO/REPLACE INTO/' "$f" | DB turtle_world 2>"$err"; then
     status="ok (replace)"
   else
-    echo "FAILED $name:"; head -3 "$err"; rm -f "$err"; exit 1
+    # The client echoes the offending statement ahead of the error, so the
+    # first lines are the statement and the ERROR line is what has to surface.
+    echo "FAILED $name:"
+    grep -m3 -E '^ERROR' "$err" || head -5 "$err"
+    mkdir -p "$HERE/logs" && cp -f "$err" "$HERE/logs/migration-$name.err" 2>/dev/null \
+      && echo "full output: server/logs/migration-$name.err"
+    rm -f "$err"; exit 1
   fi
   rm -f "$err"
   hash=$(sha1sum "$f" | awk '{print toupper($1)}')

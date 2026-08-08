@@ -506,6 +506,49 @@ $(tail -n 15 "$SERVER/logs/mysql.out" 2>/dev/null | sed 's/^/  /')"
   write_db_env
 }
 
+# The root password is only set when the data dir is created, so a server/db
+# left by an earlier run can hold a root account that refuses this script's
+# password over TCP; a data dir from before this script set an auth method has
+# root on unix_socket, which no password can satisfy. The local socket is the
+# way back in, since it reaches this project's server alone and its root still
+# answers there.
+ensure_db_credentials() {
+  DB -e "SELECT 1" >/dev/null 2>&1 && return 0
+  warn "the database in server/db does not accept $TWOW_DB_USER's password over
+  $TWOW_DB_HOST:$TWOW_DB_PORT; repairing the account through the local socket"
+  mariadb --socket="$SERVER/db/mysql.sock" -u "$TWOW_DB_USER" -e "
+    ALTER USER '$TWOW_DB_USER'@'localhost' IDENTIFIED BY '$TWOW_DB_PASS';
+    CREATE USER IF NOT EXISTS '$TWOW_DB_USER'@'127.0.0.1' IDENTIFIED BY '$TWOW_DB_PASS';
+    GRANT ALL PRIVILEGES ON *.* TO '$TWOW_DB_USER'@'127.0.0.1' WITH GRANT OPTION;
+    FLUSH PRIVILEGES;" >/dev/null 2>&1 \
+    || die "the database in server/db rejects $TWOW_DB_USER and the socket refuses it too.
+  Give the right password as TWOW_DB_PASS=... $0 ${mode:-setup}, or stop the database
+  and delete ${SERVER#"$ROOT"/}/db to start it over (the game databases are seeded again;
+  nothing else is kept there)."
+  DB -e "SELECT 1" >/dev/null 2>&1 \
+    || die "the account was repaired but $TWOW_DB_HOST:$TWOW_DB_PORT still refuses it,
+  which means that port is answered by a different MariaDB than the one in
+  ${SERVER#"$ROOT"/}/db. Stop that one, or pick another port: TWOW_DB_PORT=<port> $0 ${mode:-setup}"
+  say "root's password repaired"
+}
+
+# Everything below writes the game databases, so the far end has to be this
+# project's own server. A port is just as happily answered by a distro MariaDB
+# service, and seeding into that would land in someone else's data.
+assert_own_database() {
+  local dd want="$SERVER/db"
+  dd=$(DB -N -B -e "SELECT @@datadir" 2>/dev/null) || dd=""
+  [[ -n "$dd" ]] || die "could not ask $TWOW_DB_HOST:$TWOW_DB_PORT where it keeps its data."
+  dd="${dd%/}"
+  if command -v realpath >/dev/null 2>&1; then
+    dd=$(realpath -m "$dd"); want=$(realpath -m "$want")
+  fi
+  [[ "$dd" == "$want" ]] || die "the MariaDB on $TWOW_DB_HOST:$TWOW_DB_PORT stores its data in
+  $dd, not in $want, so it belongs to something else (a distro
+  mariadb service?). Stop it, or run this on another port:
+  TWOW_DB_PORT=<port> $0 ${mode:-setup}"
+}
+
 ensure_database() {
   mkdir -p "$SERVER/logs"
   resolve_db_port
@@ -524,6 +567,8 @@ ensure_database() {
   else
     start_native_db
   fi
+  ensure_db_credentials
+  assert_own_database
 
   if DB -N -e "SELECT 1 FROM turtle_logon.account LIMIT 1" >/dev/null 2>&1; then
     say "game databases already present"; return
@@ -854,6 +899,9 @@ world console. See README.md for what to download before the first run.
 
 EOF
 }
+
+# run only when executed, not when sourced (keeps the functions testable)
+[[ "${BASH_SOURCE[0]}" == "$0" ]] || return 0
 
 detect_distro   # package names and the daemon hint, whatever mode we run
 
