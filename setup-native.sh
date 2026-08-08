@@ -302,6 +302,37 @@ system_ace() {
   echo "$v"
 }
 
+# How far the compile may be parallelized, printed only where a cgroup holds
+# this machine to less than it has. nproc counts the host's CPUs even inside a
+# container, so an LXC given two cores on a large host would start one compiler
+# per host CPU and be killed for it; the same goes for a memory cap, at roughly
+# a gigabyte per C++ job. Nothing is printed when neither limit is set, which
+# leaves make and ninja on their own defaults everywhere else.
+CG=/sys/fs/cgroup
+build_jobs() {
+  local jobs cap quota period mem
+  jobs=$(nproc 2>/dev/null) || return 0
+  if [[ -r $CG/cpu.max ]]; then                                   # cgroup v2
+    read -r quota period < "$CG/cpu.max" || quota=max
+  elif [[ -r $CG/cpu/cpu.cfs_quota_us && -r $CG/cpu/cpu.cfs_period_us ]]; then
+    quota=$(<"$CG/cpu/cpu.cfs_quota_us"); period=$(<"$CG/cpu/cpu.cfs_period_us")
+  fi
+  if [[ ${quota:-} =~ ^[0-9]+$ && ${period:-0} =~ ^[0-9]+$ ]] && ((period > 0)); then
+    cap=$(( (quota + period - 1) / period ))
+    ((cap > 0 && cap < jobs)) && jobs=$cap
+  fi
+  mem=""
+  [[ -r $CG/memory.max ]] && mem=$(<"$CG/memory.max")
+  [[ -z $mem && -r $CG/memory/memory.limit_in_bytes ]] && mem=$(<"$CG/memory/memory.limit_in_bytes")
+  # an unset limit reads as "max" on v2 and as a number near INT64_MAX on v1
+  if [[ $mem =~ ^[0-9]+$ ]] && ((mem < (1 << 62))); then
+    cap=$(( mem / (1 << 30) )); ((cap < 1)) && cap=1
+    ((cap < jobs)) && jobs=$cap
+  fi
+  ((jobs < $(nproc))) && printf '%s' "$jobs"
+  return 0
+}
+
 # ACE_ROOT is left unset for a packaged ACE, which is where FindACE.cmake finds
 # it under /usr; otherwise it points at the tree built below.
 select_ace() {
@@ -329,7 +360,8 @@ ensure_ace() {
   echo '#include "ace/config-linux.h"' > "$ACE_ROOT/ace/config.h"
   echo 'include $(ACE_ROOT)/include/makeinclude/platform_linux.GNU' \
     > "$ACE_ROOT/include/makeinclude/platform_macros.GNU"
-  make -C "$ACE_ROOT/ace" -j"$(nproc)" > "$ROOT/deps/ace-build.log" 2>&1 \
+  local jobs; jobs=$(build_jobs)
+  make -C "$ACE_ROOT/ace" -j"${jobs:-$(nproc)}" > "$ROOT/deps/ace-build.log" 2>&1 \
     || die "ACE build failed, see $ROOT/deps/ace-build.log"
   [[ -f "$ACE_ROOT/lib/libACE.so" ]] || die "ACE build produced no libACE.so, see $ROOT/deps/ace-build.log"
 }
@@ -345,7 +377,9 @@ ensure_binaries() {
   cmake -B "$ROOT/build" -S "$ROOT/src" -GNinja \
     -DCMAKE_BUILD_TYPE=Release -DDEBUG_SYMBOLS=OFF > "$ROOT/build-configure.log" 2>&1 \
     || die "cmake configure failed, see $ROOT/build-configure.log"
-  ninja -C "$ROOT/build" mangosd realmd \
+  local jobs; jobs=$(build_jobs)
+  [[ -n "$jobs" ]] && say "holding the compile to $jobs job(s) to stay inside this cgroup's limits"
+  ninja -C "$ROOT/build" ${jobs:+-j"$jobs"} mangosd realmd \
     || die "compile failed. Scroll up for the first error; report it on the tortoise-wow GitHub."
   install_binaries "$ROOT/build/src/mangosd/mangosd" "$ROOT/build/src/realmd/realmd"
   say "installed native mangosd and realmd"
@@ -814,7 +848,8 @@ update_all() {
     || cmake -B "$ROOT/build" -S "$ROOT/src" -GNinja \
          -DCMAKE_BUILD_TYPE=Release -DDEBUG_SYMBOLS=OFF > "$ROOT/build-configure.log" 2>&1 \
     || die "cmake configure failed, see $ROOT/build-configure.log"
-  ninja -C "$ROOT/build" mangosd realmd \
+  local jobs; jobs=$(build_jobs)
+  ninja -C "$ROOT/build" ${jobs:+-j"$jobs"} mangosd realmd \
     || die "compile failed; the installed binaries were not touched.
   Fix the error above or report it on the tortoise-wow GitHub."
   install_binaries "$ROOT/build/src/mangosd/mangosd" "$ROOT/build/src/realmd/realmd"
