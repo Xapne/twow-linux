@@ -399,13 +399,19 @@ $(vm 'tail -n 15 twow/setup.log' 2>/dev/null)"; }
 # this host reaches through the same forwards as one on the LAN.
 # =============================================================================
 open_forwards() {
-  vm 'sed -i "s/^BindIP.*/BindIP = \"0.0.0.0\"/" twow/server/bin/realmd.conf twow/server/bin/mangosd.conf'
-  # advertise this host's LAN address: works for LAN clients AND for a client
-  # on this host (it reaches its own LAN IP through the same forwards)
-  local lanip
+  # The kit owns where the realm answers, writing the address and BindIP
+  # together so the two cannot drift apart. Only the host knows which address
+  # to hand it, since the guest cannot see the network its forwards arrive
+  # from, and --bind 0.0.0.0 is passed either way: the forwards target the
+  # guest's own address, never its loopback, whatever clients are told.
+  local lanip addr
   lanip=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+' || true)
+  # A LAN address works for a client on this host too, which reaches its own
+  # LAN address through the same forward.
+  addr=${lanip:-127.0.0.1}
+  vm "cd twow && ./setup-native.sh realm $addr --bind 0.0.0.0" >/dev/null 2>&1 \
+    || { warn "could not set the realm address; '$0 tune' does it interactively"; return 0; }
   if [[ -n "$lanip" ]]; then
-    vmdb "turtle_logon -e \"UPDATE realmlist SET address='$lanip'\""
     say "realm reachable from this host and the LAN: set realmlist $lanip"
     note "if a firewall runs here, open tcp $REALM_PORT and $WORLD_PORT"
   else
