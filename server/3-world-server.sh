@@ -35,21 +35,11 @@ EOF
 
 CONF="$SERVER/bin/mangosd.conf"
 
+LEVEL=""
 case "${1:-}" in
   -h|--help) usage; exit 0;;
   "") ;;
-  [0-3])
-    [[ -f "$CONF" ]] || die "server/bin/mangosd.conf is missing; re-extract the repack."
-    conf_has "$CONF" LogLevel \
-      || die "mangosd.conf has no LogLevel line, so the console level cannot be set here.
-  Add one, or start without an argument to use the config as it stands."
-    conf_set "$CONF" LogLevel "$1"
-    # Quiet levels also mute the per-query SQL echo, which prints at basic level
-    # whatever LogLevel says; chatty levels show it.
-    if (( $1 <= 1 )); then sqlfilter=1; else sqlfilter=0; fi
-    conf_set "$CONF" LogFilter_SQLText "$sqlfilter"
-    say "console LogLevel set to $1, SQL echo $( ((sqlfilter)) && echo off || echo on)"
-    ;;
+  [0-3]) LEVEL="$1";;
   *)
     warn "loglevel must be 0, 1, 2 or 3 (got '$1')"
     usage; exit 1;;
@@ -73,6 +63,20 @@ assert_port_ours "$PORT" mangosd
 # deep inside the core, far from the thing that was actually missing.
 need_database mangosd.conf WorldDatabase.Info "the world server"
 need_realmd "the world server"
+
+# Written once the start is going ahead, so a refused one leaves the config as
+# it found it. Quiet levels also mute the per-query SQL echo, which prints at
+# basic level whatever LogLevel says; chatty levels show it.
+if [[ -n "$LEVEL" ]]; then
+  conf_has "$CONF" LogLevel \
+    || die "mangosd.conf has no LogLevel line, so the console level cannot be set here.
+  Add one, or start without an argument to use the config as it stands."
+  conf_set "$CONF" LogLevel "$LEVEL"
+  if (( LEVEL <= 1 )); then sqlfilter=1; else sqlfilter=0; fi
+  conf_set "$CONF" LogFilter_SQLText "$sqlfilter"
+  say "console LogLevel set to $LEVEL, SQL echo $( ((sqlfilter)) && echo off || echo on)"
+fi
+
 # Checked at every start rather than at seeding alone: a database restored from
 # any older backup carries the same stale date.
 fix_stale_maintenance

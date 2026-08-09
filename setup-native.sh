@@ -444,8 +444,15 @@ fix_configs() {
     sed -i -E "s@^([[:space:]]*(Login|World|Character|Logs)Database\.?Info[[:space:]]*=[[:space:]]*\")[^;\"]*;[^;\"]*;@\1$TWOW_DB_HOST;$TWOW_DB_PORT;@" "$f"
   done
   sed -i 's|^DataDir = "\.\./Data"|DataDir = "../data"|' "$SERVER/bin/mangosd.conf"
+  # The repack ships mangosd at LogLevel 3 with the SQL echo on, which buries the
+  # console under every statement the core runs. Errors only is the level the
+  # world is worth watching at, and the log file keeps its own detail through
+  # LogFileLevel. Both are settings, so a later choice stands until setup runs
+  # again; ./3-world-server.sh <level> changes them for a single start.
+  conf_set "$SERVER/bin/mangosd.conf" LogLevel 1
+  conf_set "$SERVER/bin/mangosd.conf" LogFilter_SQLText 1
   write_db_env
-  say "configs checked (database $TWOW_DB_HOST:$TWOW_DB_PORT, DataDir lowercase)"
+  say "configs checked (database $TWOW_DB_HOST:$TWOW_DB_PORT, DataDir lowercase, console at errors only)"
 }
 
 # -----------------------------------------------------------------------------
