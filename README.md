@@ -28,6 +28,21 @@ the preservation Discord; links in the guide can expire):
 - a clean pre-shutdown 1.18.1 client, extracted into `client/` (only needed
   to play, not to convert)
 
+### What this release was tested against
+
+Other builds are likely to work; these are the ones a conversion was run on
+end to end.
+
+| Piece | Version |
+|---|---|
+| Server repack | `TurtleWoW_1.18.zip`, 198,874,545 bytes |
+| Map data | `data.zip`, 1,246,273,520 bytes |
+| Client | `1.18.1-7272-Hotfix-2026-04-12` |
+| Core source | Penqle/tortoise-wow, branch `1181dev`, at `b6b0e3d` |
+
+`./twow.sh doctor` checks an install against what this conversion knows, which
+is the first thing to run when a newer repack appears.
+
 ## Usage
 
 ```
