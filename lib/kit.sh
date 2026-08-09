@@ -108,10 +108,29 @@ port_free() {
 # Both cores rename their main thread ("MainThread" in /proc comm), so process
 # checks have to look at the command line, not the process name. The patterns
 # are the invocation the start scripts use, and signalling matches on them too.
-WORLD_PROC='mangosd -c'
-REALM_PROC='realmd -c'
-world_running() { pgrep -f "$WORLD_PROC" >/dev/null 2>&1; }
-realm_running() { pgrep -f "$REALM_PROC" >/dev/null 2>&1; }
+#
+# The bracket keeps a printed pattern from finding itself once somebody pastes
+# it: a shell carrying "mangosd -c" matches a plain one.
+# Both are read by twow.sh, which sources this file.
+# shellcheck disable=SC2034
+WORLD_PROC='[m]angosd -c'
+# shellcheck disable=SC2034
+REALM_PROC='[r]ealmd -c'
+
+# The pids running a binary from server/bin. A command line settles nothing,
+# since anything may carry "mangosd -c" in its arguments; /proc/pid/exe names
+# the binary itself, the way our_listener settles a port.
+server_pids() {  # $1 binary name in server/bin
+  local p exe
+  for p in $(pgrep -f "$1 -c" 2>/dev/null); do
+    exe=$(readlink -f "/proc/$p/exe" 2>/dev/null) || continue
+    [[ "$exe" == "$SERVER/bin/$1" ]] && printf '%s\n' "$p"
+  done
+  return 0
+}
+
+world_running() { [[ -n "$(server_pids mangosd)" ]]; }
+realm_running() { [[ -n "$(server_pids realmd)" ]]; }
 
 # The pid holding a port, but only when the binary behind it is one of ours.
 # Anything may listen on 3724: a second install of this kit, a repack still

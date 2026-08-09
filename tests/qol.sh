@@ -47,10 +47,15 @@ expect "a stamped log resolves to the newest" \
 # Everything run_all touches is replaced, and tmux is a stub on PATH that
 # records how it was called.
 mkdir -p "$TMP/bin" "$TMP/server/bin"
+# The stub records how it was called, and answers has-session the way tmux
+# would: no session before new-session, one after.
 cat > "$TMP/bin/tmux" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$TMPFILE"
-[ "$1" = has-session ] && exit 1
+if [ "$1" = has-session ]; then
+  grep -q new-session "$TMPFILE" && exit 0
+  exit 1
+fi
 exit 0
 STUB
 chmod +x "$TMP/bin/tmux"

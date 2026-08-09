@@ -1085,16 +1085,16 @@ interactive_config() {
 update_all() {
   [[ -d "$ROOT/src/.git" ]] || die "no source checkout in src/; run: $0 setup"
   [[ -x "$SERVER/bin/mangosd" ]] || die "not converted yet; run: $0 setup"
-  # mangosd renames its main thread, so its /proc comm is "MainThread" and
-  # pgrep -x never matches it; match the command line instead.
   if world_running; then
     die "the world server is running; stop it first.
-  In its console: Ctrl+C. Detached: pkill -TERM -f '$WORLD_PROC'
+  In its console: Ctrl+C. Detached: $0 stop, or pkill -TERM -f '$WORLD_PROC'
   SIGINT is the core's restart signal; with pkill -INT the world is only restarted.
   Swapping schema under a live server is how characters get eaten."
   fi
   if realm_running; then
-    pkill -INT -f "$REALM_PROC"; sleep 1
+    local rpid
+    for rpid in $(server_pids realmd); do kill -INT "$rpid" 2>/dev/null || true; done
+    sleep 1
     say "stopped realmd (a running binary cannot be replaced)"
   fi
 
@@ -1437,8 +1437,9 @@ stop_all() {
   if world_running; then
     say "stopping the world server"
     # SIGTERM is the core's clean shutdown (SIGINT is its restart signal, which
-    # the run wrapper would answer by starting the world again).
-    pkill -TERM -f "$WORLD_PROC" 2>/dev/null || true
+    # the run wrapper would answer by starting the world again). Signalled by
+    # pid, so the signal reaches this install's world server and nothing else.
+    for pid in $(server_pids mangosd); do kill -TERM "$pid" 2>/dev/null || true; done
     for i in $(seq 1 60); do world_running || break; sleep 1; done
     world_running && warn "the world server is still running; it may be saving characters"
   else
@@ -1600,8 +1601,8 @@ console_attach() {
 
 run_all() {
   [[ -x "$SERVER/bin/mangosd" ]] || die "no native binaries yet; run: $0 setup"
-  # 3-world-server.sh takes at most a log level, so what is left after the flag
-  # is that.
+  # 3-world-server.sh takes at most a log level, which is whatever is left once
+  # the flag is taken out.
   local s a detached=0 level=""
   for a in "$@"; do
     case "$a" in
@@ -1634,6 +1635,12 @@ $(tail -n 15 "$SERVER/logs/realmd.out" 2>/dev/null | sed 's/^/  /')"
   Install it, or start the world in this terminal with: $0 run"
     console_running && die "a world console is already running: $0 console"
     tmux new-session -d -s "$CONSOLE_SESSION" -c "$SERVER" "./3-world-server.sh $level"
+    # tmux reports success the moment the session exists, so a world that
+    # refuses to start looks the same as one that came up. The session dies
+    # with its command, which is what distinguishes them.
+    sleep 3
+    console_running || die "the world server stopped as soon as it started.
+  Start it in this terminal to see what it says: $0 run${level:+ $level}"
     say "world console running in the background as tmux session '$CONSOLE_SESSION'"
     say "first boot loads all maps and takes a few minutes; watch it with: $0 console"
     return 0
