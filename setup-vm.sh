@@ -425,18 +425,25 @@ open_forwards() {
 }
 
 # =============================================================================
-# GM account - do it for them, and teach the console way
+# the questions a fresh install asks - the kit owns them, this hands it a tty
 # =============================================================================
-make_account() {
-  # Handed to the kit rather than written twice. This used to hash the password,
-  # write the INSERT and keep its own copy of the stock account names, and the
-  # two copies had already diverged: only the kit's rejects a name the client
-  # cannot type or an empty password, and only the kit's knew to stay quiet on a
-  # re-run. It also reaches the database through the kit's own credentials,
-  # which a hardcoded root/mangos here got wrong the moment anyone set
-  # TWOW_DB_PASS. Failure is not fatal: the world console makes accounts too.
-  vmtty 'cd twow && ./setup-native.sh account --if-none' \
-    || warn "the account step did not finish; the world console makes them too:
+# The conversion runs detached so the progress bar can follow its log, and a
+# step without a terminal skips every question the kit would ask. They are asked
+# here instead, over a tty, through the kit's own entry point: which questions
+# there are is the kit's to know, and naming them here is what lost the realm
+# name from this path once already.
+#
+# The work is handed over rather than written twice. An earlier version hashed
+# the password and wrote the INSERT here, and the two copies had diverged: only
+# the kit's rejects a name the client cannot type or an empty password, and only
+# the kit's knew to stay quiet on a re-run. It also reaches the database through
+# the kit's own credentials, which a hardcoded root/mangos here got wrong the
+# moment anyone set TWOW_DB_PASS. Failure is not fatal: the world console makes
+# accounts too.
+first_run() {
+  vmtty 'cd twow && ./setup-native.sh firstrun' \
+    || warn "the setup questions did not finish; '$0 tune' sets the realm name,
+  and the world console makes accounts:
   account create <name> <pass>  and  account set gmlevel <name> 3"
   return 0
 }
@@ -804,7 +811,7 @@ main() {
   push_payload
   convert
   open_forwards
-  make_account
+  first_run
   handoff
 }
 

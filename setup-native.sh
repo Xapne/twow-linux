@@ -554,6 +554,16 @@ offer_realm_name() {
   fi
 }
 
+# What a finished install still has to ask, listed once. setup-vm.sh runs the
+# conversion detached, which leaves it without a terminal, and calls this over
+# one afterwards, so a question added here reaches every path.
+#
+# Each is asked only until it has been answered: a repeated run is silent.
+first_run_questions() {
+  offer_realm_name
+  has_own_gm || make_gm_account
+}
+
 # The repack ships ADMIN and TEST at rank 4, so the server never lacks a game
 # master; what a new one lacks is an account belonging to whoever set it up.
 # Asking only while there is none keeps a repeated setup quiet.
@@ -745,7 +755,10 @@ ensure_database() {
 # a pet whose owner exists. Removing the two accounts leaves their characters
 # ownerless, which is what the sweep below is for, so the order matters.
 clean_seed_leftovers() {
-  local before after
+  local before after stock
+  stock=$(DB -N -B -e "SELECT COUNT(*) FROM turtle_logon.account
+      WHERE username IN ('ADMIN','TEST')
+        AND sha_pass_hash = UPPER(SHA1(CONCAT(username, ':', username)))" 2>/dev/null) || stock=0
   before=$(DB -N -B -e "SELECT
       (SELECT COUNT(*) FROM turtle_logon.account
          WHERE username IN ('ADMIN','TEST')
@@ -832,6 +845,8 @@ SQL
     + (SELECT COUNT(*) FROM turtle_char.character_pet p
          LEFT JOIN turtle_char.characters c ON c.guid = p.owner WHERE c.guid IS NULL)" 2>/dev/null) || after=0
   say "cleared $(( before - after )) row(s) the repack's dump arrived with; the realm starts empty"
+  (( stock > 0 )) && say "ADMIN and TEST are gone with it; an account keeps its place here once its password is changed"
+  return 0
 }
 
 # -----------------------------------------------------------------------------
@@ -1210,6 +1225,11 @@ ${C_BOLD}Modes:${C_RST}
                  mangosd in the foreground as the server console
                  (Ctrl+C stops it); optional [level] is the mangosd
                  console log level, 0 (quiet) to 3 (debug)
+  ${C_GREEN}firstrun${C_RST}       the questions a finished install still has: a name for the
+                 realm and a game master account, each asked only until it
+                 has been answered.
+                 ${C_DIM}Part of setup already; setup-vm.sh calls it on its own
+                 because its conversion runs without a terminal.${C_RST}
   ${C_GREEN}account${C_RST} [--if-none]
                  create a game master account and log in as yourself
                  instead of the repack's shared ADMIN. Offered once at the
@@ -1281,18 +1301,16 @@ case "$mode" in
     ensure_binaries; fix_configs; fix_client; ensure_database; clean_seed_leftovers
     ensure_migrations
     sync_client_realmlist
-    # Only worth asking where someone is there to answer, and each only until it
-    # has been answered once.
-    if [[ -t 0 ]]; then
-      offer_realm_name
-      has_own_gm || make_gm_account
-    fi
+    [[ -t 0 ]] && first_run_questions
     say "conversion complete"
     say "customize the server anytime with: $0 interactive"
     if [[ "$mode" == all ]]; then run_all "${@:2}"; fi
     ;;
   run) check_deps; run_all "${@:2}" ;;
   interactive) check_deps; ensure_repack; interactive_config ;;
+  firstrun)
+    check_deps; resolve_db_port; start_native_db; ensure_db_credentials; assert_own_database
+    first_run_questions ;;
   account)
     check_deps; resolve_db_port; start_native_db; ensure_db_credentials; assert_own_database
     DB -N -e "SELECT 1 FROM turtle_logon.account LIMIT 1" >/dev/null 2>&1 \
@@ -1314,7 +1332,11 @@ case "$mode" in
   to this machine. --bind overrides what the server listens on, which only
   differs behind a port forward. --name sets what the realm list calls it."
     if [[ "$2" == --name ]]; then
-      [[ -n "${3:-}" ]] || die "--name needs a realm name"
+      # --if-default is what an installer asks for: offer once, on a realm still
+      # carrying the name the repack shipped, and say nothing on a re-run.
+      if [[ "${3:-}" == --if-default ]]; then offer_realm_name; exit 0; fi
+      [[ -n "${3:-}" ]] || die "--name needs a realm name, or --if-default to offer one
+  while the repack's own name is still in place"
       set_realm_name "$3" || exit 1
       say "the realm is called $3"
       say "restart the server to apply: $0 run"
