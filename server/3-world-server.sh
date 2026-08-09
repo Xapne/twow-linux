@@ -64,7 +64,7 @@ if world_running; then
   $ROOT/setup-native.sh stop"
 fi
 
-PORT=$(conf_get "$CONF" WorldServerPort); PORT=${PORT:-8091}
+PORT=$(world_port)
 
 need_binary mangosd
 assert_port_ours "$PORT" mangosd

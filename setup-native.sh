@@ -782,7 +782,7 @@ interactive_config() {
         # Only now: a realm nobody outside can reach is the point of the
         # question just answered, and a firewall is the usual reason it stays
         # unreachable after everything here is set correctly.
-        fw_offer_ports 3724 "$(conf_get "$M" WorldServerPort)"
+        fw_offer_ports "$(realm_port)" "$(world_port)"
       else
         ui_warn "leaving the realm address unchanged"
       fi
@@ -996,11 +996,12 @@ status_all() {
   else
     warn "database  not running"
   fi
-  pid=$(our_listener 3724)
-  if [[ -n "$pid" ]]; then say "realmd    running on 3724 (pid $pid)"
-  elif ss -tln 2>/dev/null | grep -q '[:.]3724 '; then warn "realmd    not ours; 3724 is held by something else"
+  local rp; rp=$(realm_port)
+  pid=$(our_listener "$rp")
+  if [[ -n "$pid" ]]; then say "realmd    running on $rp (pid $pid)"
+  elif ss -tln 2>/dev/null | grep -q "[:.]$rp "; then warn "realmd    not ours; $rp is held by something else"
   else warn "realmd    not running"; fi
-  local wp; wp=$(conf_get "$SERVER/bin/mangosd.conf" WorldServerPort 2>/dev/null); wp=${wp:-8091}
+  local wp; wp=$(world_port)
   pid=$(our_listener "$wp")
   if [[ -n "$pid" ]]; then say "world     running on $wp (pid $pid)"
   elif world_running; then say "world     starting; not accepting connections yet"
@@ -1024,11 +1025,12 @@ stop_all() {
   else
     say "world server already stopped"
   fi
-  pid=$(our_listener 3724)
+  local rp; rp=$(realm_port)
+  pid=$(our_listener "$rp")
   if [[ -n "$pid" ]]; then
     say "stopping realmd (pid $pid)"
     kill -TERM "$pid" 2>/dev/null || true
-    for i in $(seq 1 15); do [[ -n "$(our_listener 3724)" ]] || break; sleep 1; done
+    for i in $(seq 1 15); do [[ -n "$(our_listener "$rp")" ]] || break; sleep 1; done
   else
     say "realmd already stopped"
   fi
@@ -1059,7 +1061,7 @@ run_all() {
   start_native_db
   say "MariaDB ready on $TWOW_DB_HOST:$TWOW_DB_PORT"
 
-  local port; port=$(conf_get "$SERVER/bin/realmd.conf" RealmServerPort); port=${port:-3724}
+  local port; port=$(realm_port)
   assert_port_ours "$port" realmd
   if [[ -z "$(our_listener "$port")" ]]; then
     ( cd "$SERVER" && nohup ./2-realm-server.sh > "$SERVER/logs/realmd.out" 2>&1 & )

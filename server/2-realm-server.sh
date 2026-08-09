@@ -38,7 +38,7 @@ if realm_running; then
   exit 0
 fi
 
-PORT=$(conf_get "$CONF" RealmServerPort); PORT=${PORT:-3724}
+PORT=$(realm_port)
 
 need_binary realmd
 assert_port_ours "$PORT" realmd

@@ -84,6 +84,18 @@ find_mariadbd() {
   return 1
 }
 
+# The ports the two servers answer on, as their configs have them. Asked in one
+# place so starting, stopping and reporting all reach the same server when a
+# port has been moved.
+realm_port() {
+  local p; p=$(conf_get "$SERVER/bin/realmd.conf" RealmServerPort 2>/dev/null) || p=""
+  printf '%s' "${p:-3724}"
+}
+world_port() {
+  local p; p=$(conf_get "$SERVER/bin/mangosd.conf" WorldServerPort 2>/dev/null) || p=""
+  printf '%s' "${p:-8091}"
+}
+
 port_free() {
   if command -v ss >/dev/null 2>&1; then
     ! ss -tln 2>/dev/null | grep -q "[:.]$1 "

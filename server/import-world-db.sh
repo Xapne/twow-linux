@@ -15,7 +15,11 @@ KIT_RERUN="$0"
 cd "$SERVER"
 
 [[ -f turtle_world.sql ]] || die "turtle_world.sql is not in server/; it comes with the repack."
-mariadb_running || die "the database is not running; start it with: ./1-start-mysql.sh"
+# Asked through the same connection the import will use, so a database on
+# another host answers for itself rather than being judged by a local socket.
+DB -e "SELECT 1" >/dev/null 2>&1 \
+  || die "nothing answers at $TWOW_DB_HOST:${TWOW_DB_PORT:-3306}; start the database with:
+  ./1-start-mysql.sh"
 
 say "dropping and recreating turtle_world"
 DB -e "DROP DATABASE IF EXISTS turtle_world; CREATE DATABASE turtle_world CHARACTER SET utf8mb4;"
