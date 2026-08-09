@@ -60,6 +60,8 @@ dependency once and every install path picks it up.
 - `lib/kit.sh` - logging, the database handle and the port, process and config
   checks every script here shares
 - `server/` - the converted repack and its day-to-day scripts
+- `check.sh` - shell syntax, shellcheck and the tests in `tests/`, run in one
+  go; `.github/workflows/check.yml` runs the same script on push
 
 ## Don't want to touch your OS? Build a machine instead
 
