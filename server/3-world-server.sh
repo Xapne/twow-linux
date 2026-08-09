@@ -1,32 +1,81 @@
 #!/usr/bin/env bash
-# Replaces "3.World server.bat": native world server (port 8091).
-# Start after MySQL and the realm server. First boot loads maps and takes a
-# few minutes. This terminal is also the server console
+# Starts the world server (mangosd) in the foreground, on port 8091 by default.
+# Ready when it reports the world is initialized; the first boot loads every map
+# and takes a few minutes. This terminal is also the server console
 # (e.g. "account create <user> <pass>").
 #
 # Usage: ./3-world-server.sh [loglevel]
-#   loglevel (optional): console verbosity 0-3, written into mangosd.conf
-#   before launch. 0 = almost nothing, 1 = errors only, 2 = detail,
-#   3 = full debug. Without an argument the current config value is used.
 set -euo pipefail
-cd "$(dirname "$(readlink -f "$0")")/bin"
+SERVER="$(dirname "$(readlink -f "$0")")"
+ROOT="$(dirname "$SERVER")"
+KIT_TAG=world
+KIT_RERUN="$0"
+[[ -r "$ROOT/lib/kit.sh" ]] \
+  || { printf 'lib/kit.sh is missing beside this folder; restore it from the repo\n' >&2; exit 1; }
+# shellcheck source=../lib/kit.sh
+. "$ROOT/lib/kit.sh"
 
-if [[ $# -ge 1 ]]; then
-  case "$1" in
-    [0-3])
-      sed -i -E "s/^LogLevel = [0-9]+/LogLevel = $1/" mangosd.conf
-      # quiet levels also mute the per-query SQL echo (LogFilter_SQLText),
-      # chatty levels show it; it prints at basic level regardless of LogLevel
-      if [[ "$1" -le 1 ]]; then sqlfilter=1; else sqlfilter=0; fi
-      sed -i -E "s/^LogFilter_SQLText = [0-9]+/LogFilter_SQLText = $sqlfilter/" mangosd.conf
-      echo "console LogLevel set to $1, SQL echo $([[ $sqlfilter == 1 ]] && echo off || echo on)"
-      ;;
-    *)
-      echo "error: loglevel must be 0, 1, 2 or 3 (got '$1')" >&2
-      exit 1
-      ;;
-  esac
+usage() {
+  cat <<EOF
+Usage: $0 [loglevel]
+
+Starts the world server and hands this terminal to its console. The optional
+loglevel is written into mangosd.conf before launch and sets how much the
+console says: 0 almost nothing, 1 errors only, 2 detail, 3 full debug. Without
+one, whatever the config already holds is used. Log files keep their own detail
+through LogFileLevel.
+
+The world is brought back after a crash or a scheduled restart, unless
+server/restart.paused exists; that file suspends it over maintenance.
+
+The database and the login server are checked for first.
+TWOW_SKIP_PREFLIGHT=1 starts without those checks.
+EOF
+}
+
+CONF="$SERVER/bin/mangosd.conf"
+
+case "${1:-}" in
+  -h|--help) usage; exit 0;;
+  "") ;;
+  [0-3])
+    [[ -f "$CONF" ]] || die "server/bin/mangosd.conf is missing; re-extract the repack."
+    conf_has "$CONF" LogLevel \
+      || die "mangosd.conf has no LogLevel line, so the console level cannot be set here.
+  Add one, or start without an argument to use the config as it stands."
+    conf_set "$CONF" LogLevel "$1"
+    # Quiet levels also mute the per-query SQL echo, which prints at basic level
+    # whatever LogLevel says; chatty levels show it.
+    if (( $1 <= 1 )); then sqlfilter=1; else sqlfilter=0; fi
+    conf_set "$CONF" LogFilter_SQLText "$sqlfilter"
+    say "console LogLevel set to $1, SQL echo $( ((sqlfilter)) && echo off || echo on)"
+    ;;
+  *)
+    warn "loglevel must be 0, 1, 2 or 3 (got '$1')"
+    usage; exit 1;;
+esac
+
+[[ -f "$CONF" ]] || die "server/bin/mangosd.conf is missing.
+  The repack provides it; re-extract TurtleWoW_1.18.zip or restore the file."
+
+if world_running; then
+  die "the world server is already running.
+  Its console is the terminal it was started in. To stop it:
+  $ROOT/setup-native.sh stop"
 fi
+
+PORT=$(conf_get "$CONF" WorldServerPort); PORT=${PORT:-8091}
+
+need_binary mangosd
+assert_port_ours "$PORT" mangosd
+# The world keeps characters, items and the map data it serves in the database,
+# and reaches accounts through the login server. Started without either it fails
+# deep inside the core, far from the thing that was actually missing.
+need_database mangosd.conf WorldDatabase.Info "the world server"
+need_realmd "the world server"
+# Checked at every start rather than at seeding alone: a database restored from
+# any older backup carries the same stale date.
+fix_stale_maintenance
 
 # Restart loop on the core's exit codes (ShutdownExitCode in src/game/World.h):
 # 0 shutdown, 1 error, 2 restart. SIGINT is mapped by mangosd to 2 and SIGTERM
@@ -37,7 +86,7 @@ trap 'stop=1' INT TERM
 
 # Auto-restart is suspended while this file exists: the world is stopped as
 # usual and then left down until the file is removed.
-PAUSE="$(dirname "$(readlink -f "$0")")/restart.paused"
+PAUSE="$SERVER/restart.paused"
 
 # True when the world must not be restarted; the reason is printed.
 halt() {
@@ -46,6 +95,7 @@ halt() {
   return 1
 }
 
+cd "$SERVER/bin"
 while :; do
   set +e
   ./mangosd -c mangosd.conf

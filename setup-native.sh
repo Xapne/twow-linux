@@ -22,22 +22,10 @@ SERVER="$ROOT/server"
 . "$ROOT/lib/ui.sh"
 # shellcheck source=lib/firewall.sh
 . "$ROOT/lib/firewall.sh"
-# The TWOW_ prefix avoids collision with a bare DB_HOST/DB_PORT/DB_USER already
-# present in the environment. db.env is written in ${VAR:-default} form so
-# environment values take precedence over it; an empty port is resolved below.
-# shellcheck source=/dev/null
-[[ -f "$SERVER/db.env" ]] && . "$SERVER/db.env"
-TWOW_DB_HOST=${TWOW_DB_HOST:-127.0.0.1}
-TWOW_DB_PORT=${TWOW_DB_PORT:-}
-TWOW_DB_USER=${TWOW_DB_USER:-root}
-TWOW_DB_PASS=${TWOW_DB_PASS:-mangos}
-# The bundled Windows MariaDB is only borrowed once, to dump the game databases
-# out of, and it carries the password the repack shipped with. That is not this
-# server's password: TWOW_DB_PASS may be set to anything, and reusing it for the
-# seeding instance makes a fresh install fail at the one step a new password
-# cannot reach.
-TWOW_SEED_PASS=${TWOW_SEED_PASS:-mangos}
-export TWOW_DB_HOST TWOW_DB_PORT TWOW_DB_USER TWOW_DB_PASS TWOW_SEED_PASS
+# Logging, the database handle, and the port, process and config questions this
+# script shares with the scripts in server/. Both used to carry a copy.
+# shellcheck source=lib/kit.sh
+. "$ROOT/lib/kit.sh"
 # Overrides the compile job count worked out below, for a machine the
 # measurement no longer fits.
 TWOW_BUILD_JOBS=${TWOW_BUILD_JOBS:-}
@@ -45,12 +33,6 @@ export TWOW_BUILD_JOBS
 ACE_VER=8.0.3
 BRANCH=1181dev
 REPO=https://github.com/Penqle/tortoise-wow.git
-
-say()  { printf '\033[1;32m[setup]\033[0m %s\n' "$*"; }
-warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
-die()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
-
-DB() { mariadb -h "$TWOW_DB_HOST" -P "$TWOW_DB_PORT" -u "$TWOW_DB_USER" -p"$TWOW_DB_PASS" --max-allowed-packet=128M "$@"; }
 
 # =============================================================================
 # Dependencies: the single source of truth
@@ -160,44 +142,6 @@ dep_packages() {
   printf '%s\n' "${out[*]}"
 }
 
-# The daemon lives in a different place on every distro, and some of them
-# keep sbin out of a normal user's PATH. Look everywhere, print the path.
-find_mariadbd() {
-  local c p
-  for c in mariadbd mysqld; do
-    p=$(command -v "$c" 2>/dev/null) && { echo "$p"; return 0; }
-  done
-  for p in /usr/sbin/mariadbd /usr/libexec/mariadbd /usr/local/sbin/mariadbd \
-           /usr/sbin/mysqld /usr/libexec/mysqld /usr/local/sbin/mysqld; do
-    [[ -x "$p" ]] && { echo "$p"; return 0; }
-  done
-  return 1
-}
-
-# mangosd renames its main thread ("MainThread" in /proc comm), so process
-# checks have to look at the command line, not the process name.
-world_running() { pgrep -f 'mangosd -c' >/dev/null 2>&1; }
-
-# The pid holding a port, but only when the binary behind it is one of ours.
-# Anything may listen on 3724: a second install of this kit, a repack still
-# running under wine, or a virtual machine forwarding the port from a guest.
-# Treating any listener as proof that our login server is up starts the world
-# against somebody else's, which fails later and further away. /proc/pid/exe is
-# asked rather than the command line, since that cannot be spoofed by a name.
-our_listener() {  # $1 port -> pid, or empty when nobody or not ours
-  local pid exe
-  pid=$( { ss -tlnp 2>/dev/null || true; } | grep "[:.]$1 " | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2)
-  [[ -n "$pid" ]] || return 0
-  exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null) || return 0
-  [[ "$exe" == "$SERVER/bin/"* ]] && printf '%s' "$pid"
-  return 0
-}
-
-# Someone is on the port, and it is not us.
-port_taken_by_other() {  # $1 port
-  ss -tln 2>/dev/null | grep -q "[:.]$1 " && [[ -z "$(our_listener "$1")" ]]
-}
-
 # Copy into place without ETXTBSY: write beside the target, then rename over
 # it. rename() only swaps the directory entry, so a running binary keeps its
 # old inode and the next start picks up the new one.
@@ -241,10 +185,6 @@ check_deps() {
   say "all required commands and headers present"
   local l; for l in "${later[@]}"; do warn "$l"; done
 }
-
-# Whether the game databases have already been imported. InnoDB gives each
-# database a directory, so this answers without starting the server.
-seeded() { [[ -d "$SERVER/db/turtle_logon" ]]; }
 
 # A local ACE build satisfies the server just as well, so once one exists the
 # packaged ACE saves nothing and advising it would only mislead.
@@ -574,6 +514,46 @@ set_realm_address() {
   return 0
 }
 
+# What the realm list shows a client. It lives in turtle_logon.realmlist beside
+# the address, and the column is 32 characters wide.
+#
+# Records what changed in CHANGES and prints only on failure, like the address
+# above, so each caller reports in its own voice.
+DEFAULT_REALM_NAME=TurtleWoW
+
+realm_name() { DB -N -B -e "SELECT name FROM turtle_logon.realmlist ORDER BY id LIMIT 1" 2>/dev/null; }
+
+set_realm_name() {  # $1 name
+  local name=$1 cur warner="${CONF_WARN:-warn}"
+  [[ -n "$name" ]] || { "$warner" "a realm name cannot be empty"; return 1; }
+  (( ${#name} <= 32 )) || { "$warner" "'$name' is ${#name} characters; the realm list holds 32"; return 1; }
+  cur=$(realm_name) || cur=""
+  [[ "$name" == "$cur" ]] && return 0
+  DB -e "UPDATE turtle_logon.realmlist SET name='${name//\'/\'\'}'" \
+    || { "$warner" "could not write the realm name into turtle_logon.realmlist"; return 1; }
+  CHANGES+=("realm name: ${cur:-unset} -> $name")
+  return 0
+}
+
+# Offered once, while every realm the repack ships is still called TurtleWoW.
+# A realm that has been named already is left alone, so a repeated setup is
+# quiet, and 'interactive' renames it at any later point.
+offer_realm_name() {
+  local cur CONF_WARN=ui_warn
+  cur=$(realm_name) || return 0
+  [[ "$cur" == "$DEFAULT_REALM_NAME" ]] || return 0
+  ui_intro "name your realm"
+  ui_note "shown in the client's realm list; Enter keeps $DEFAULT_REALM_NAME"
+  ui_text "Realm name" "$cur"
+  if [[ "$ANSWER" == "$cur" ]]; then
+    ui_outro "left as $cur"
+  elif set_realm_name "$ANSWER"; then
+    ui_outro "the realm is now called $ANSWER"
+  else
+    ui_outro "left as $cur"
+  fi
+}
+
 # The repack ships ADMIN and TEST at rank 4, so the server never lacks a game
 # master; what a new one lacks is an account belonging to whoever set it up.
 # Asking only while there is none keeps a repeated setup quiet.
@@ -618,93 +598,9 @@ make_gm_account() {
 # -----------------------------------------------------------------------------
 # native database in server/db, seeded from the bundled Windows one
 # -----------------------------------------------------------------------------
-# The project's instance is always reachable on its own socket, whatever the port.
-# ping is used rather than a query because it reports the daemon as alive even
-# when the credentials are refused; a password problem would otherwise look
-# like "not running" and be reported as a port clash further down.
-mariadb_running() { mariadb-admin --socket="$SERVER/db/mysql.sock" -u "$TWOW_DB_USER" -p"$TWOW_DB_PASS" ping >/dev/null 2>&1; }
-
-port_free() {
-  if command -v ss >/dev/null 2>&1; then
-    ! ss -tln 2>/dev/null | grep -q "[:.]$1 "
-  else
-    ! (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null
-  fi
-}
-
-# On Debian and Ubuntu the packaged mariadb is started on 3306 as soon as it is
-# installed, so that port is frequently unavailable; a free one is picked
-# instead of requiring the system service to be disabled. 3307 is left for the
-# wine seeding instance further down, which picks its own free port too.
-resolve_db_port() {
-  [[ -n "$TWOW_DB_PORT" ]] && return 0
-  local p
-  if p=$(mariadb --socket="$SERVER/db/mysql.sock" -u "$TWOW_DB_USER" -p"$TWOW_DB_PASS" \
-           -N -B -e "SELECT @@port" 2>/dev/null) && [[ -n "$p" ]]; then
-    TWOW_DB_PORT="$p"; return 0            # already running: keep the port it has
-  fi
-  for p in 3306 3308 3309 3310 3311 3312; do
-    port_free "$p" || continue
-    TWOW_DB_PORT="$p"
-    [[ "$p" == 3306 ]] || warn "port 3306 is in use by something else (a system mariadb/mysql service?);
-  using port $p for this server's own database instead. Note that a bare
-  'mariadb' in a shell still reaches 3306, not this server's database; see
-  server/db.env for the port in use. To hand 3306 back to this server, stop
-  the other one (Debian/Ubuntu: sudo systemctl disable --now mariadb) and
-  re-run this script."
-    return 0
-  done
-  die "no free port for the database between 3306 and 3312.
-  Pick one yourself with: TWOW_DB_PORT=<port> $0 ${mode:-setup}"
-}
-
-write_db_env() {
-  cat > "$SERVER/db.env" <<EOF
-# Written by setup-native.sh and read by the helper scripts in this folder so
-# they reach the same database. Safe to edit; the environment still wins.
-TWOW_DB_HOST=\${TWOW_DB_HOST:-$TWOW_DB_HOST}
-TWOW_DB_PORT=\${TWOW_DB_PORT:-$TWOW_DB_PORT}
-TWOW_DB_USER=\${TWOW_DB_USER:-$TWOW_DB_USER}
-TWOW_DB_PASS=\${TWOW_DB_PASS:-$TWOW_DB_PASS}
-EOF
-}
-
-# my.cnf is the user's to tune, so it is created once and thereafter only the
-# port and the run-as user are kept in sync.
-sync_my_cnf() {
-  local f="$SERVER/my.cnf"
-  # mariadbd aborts when invoked by root unless it is explicitly told to run as
-  # root ("Please consult the Knowledge Base to find out how to run mysqld as
-  # root!" in mysql.out); server/db is owned by root in that case anyway.
-  local run_as=""; [[ $EUID -eq 0 ]] && run_as=$'user = root\n'
-  if [[ ! -f "$f" ]]; then
-    cat > "$f" <<EOF
-[mysqld]
-datadir = $SERVER/db
-socket  = $SERVER/db/mysql.sock
-bind-address = 127.0.0.1
-port = $TWOW_DB_PORT
-${run_as}max_allowed_packet = 128M
-innodb_flush_log_at_trx_commit = 2
-innodb_buffer_pool_size = 512M
-
-[client]
-socket = $SERVER/db/mysql.sock
-port = $TWOW_DB_PORT
-max_allowed_packet = 128M
-EOF
-    return
-  fi
-  if grep -qE '^[[:space:]]*port[[:space:]]*=' "$f"; then
-    sed -i -E "s@^([[:space:]]*port[[:space:]]*=).*@\1 $TWOW_DB_PORT@" "$f"
-  else
-    sed -i "0,/^\[mysqld\]/s@@[mysqld]\nport = $TWOW_DB_PORT@" "$f"
-  fi
-  if [[ -n "$run_as" ]] && ! grep -qE '^[[:space:]]*user[[:space:]]*=' "$f"; then
-    sed -i "0,/^\[mysqld\]/s@@[mysqld]\nuser = root@" "$f"
-  fi
-}
-
+# The daemon is started by server/1-start-mysql.sh, which is also the manual
+# path; waiting for it and vouching for the credentials belong here. Both used
+# to start it, and only this one did so carefully.
 start_native_db() {
   mkdir -p "$SERVER/logs"
   if mariadb_running; then
@@ -717,15 +613,10 @@ start_native_db() {
     return
   fi
   resolve_db_port
-  sync_my_cnf
-  port_free "$TWOW_DB_PORT" || die "port $TWOW_DB_PORT is in use by something that is not our database.
-  Stop it, or run this on another port: TWOW_DB_PORT=<port> $0 ${mode:-setup}"
+  [[ -x "$SERVER/1-start-mysql.sh" ]] \
+    || die "$SERVER/1-start-mysql.sh is missing or not executable; restore it (chmod +x)."
   say "starting native MariaDB on port $TWOW_DB_PORT"
-  # distros disagree on where the daemon lives (/usr/bin on Arch, /usr/sbin on
-  # Debian, /usr/libexec on Fedora); ask the shell instead of guessing
-  local mariadbd; mariadbd=$(find_mariadbd) \
-    || die "no mariadbd/mysqld found; install $(dep_pkg_of 'MariaDB daemon')"
-  nohup "$mariadbd" --defaults-file="$SERVER/my.cnf" > "$SERVER/logs/mysql.out" 2>&1 &
+  ( cd "$SERVER" && nohup ./1-start-mysql.sh > "$SERVER/logs/mysql.out" 2>&1 & )
   local i; for i in $(seq 1 30); do [[ -S "$SERVER/db/mysql.sock" ]] && break; sleep 1; done
   [[ -S "$SERVER/db/mysql.sock" ]] || die "MariaDB did not come up. Last lines of ${SERVER#"$ROOT"/}/logs/mysql.out:
 
@@ -836,36 +727,6 @@ ensure_database() {
 }
 
 # -----------------------------------------------------------------------------
-# honor maintenance date left behind by whoever made the dump
-# -----------------------------------------------------------------------------
-# saved_variables records the PvP maintenance week of the machine a database
-# came from, and the repack's dump is months old by the time anyone installs
-# from it. The core compares that date with today, finds it long past, and
-# schedules a restart into a server that has only just started. Worse, it moves
-# the record on by a single week per restart (HonorMgr.cpp, DoMaintenance ends
-# with SetMaintenanceDays(GetNextMaintenanceDay())), so a month-old date costs a
-# month of restarts before it catches up.
-#
-# Only a date already more than a week stale is touched. A server that is
-# running normally always has its next day ahead of today, and one that was off
-# over its maintenance day has a genuinely due restart worth keeping, so
-# neither is disturbed. The record is cleared rather than guessed at: with no
-# last day set, HonorMaintenancer::Initialize works both dates out itself from
-# the core's own maintenance weekday.
-fix_stale_maintenance() {
-  local next today
-  next=$(DB -N -B -e "SELECT nextHonorMaintenanceDay FROM turtle_char.saved_variables" 2>/dev/null) || return 0
-  [[ "$next" =~ ^[0-9]+$ ]] || return 0
-  today=$(( $(date +%s) / 86400 ))
-  (( next > 0 && next < today - 7 )) || return 0
-  DB turtle_char -e "UPDATE saved_variables SET lastHonorMaintenanceDay = 0,
-                       nextHonorMaintenanceDay = 0, honorMaintenanceMarker = 0" 2>/dev/null \
-    && say "honor maintenance date was $(( today - next )) days stale; cleared, the core sets its own on this start" \
-    || warn "could not clear a stale honor maintenance date; the server may announce
-  a restart shortly after starting, and will not come back on its own."
-}
-
-# -----------------------------------------------------------------------------
 # bring the world DB schema up to what the compiled source expects
 # -----------------------------------------------------------------------------
 ensure_migrations() {
@@ -882,29 +743,13 @@ ensure_migrations() {
 # -----------------------------------------------------------------------------
 CHANGES=()
 
-conf_get() {  # $1 file, $2 key -> value, quotes and CR stripped
-  sed -n "s/^${2//./\\.}[[:space:]]*=[[:space:]]*//p" "$1" \
-    | tail -1 | tr -d '\r' | sed 's/^"\(.*\)"$/\1/'
-}
-
-conf_set() {  # $1 file, $2 key, $3 value, [$4 = quote]; no-op if unchanged
-  local file="$1" key="$2" val="$3" cur esc
-  cur="$(conf_get "$file" "$key")"
-  [[ "$cur" == "$val" ]] && return 0
-  if ! grep -q "^${key//./\\.}[[:space:]]*=" "$file"; then
-    ui_warn "$key not found in ${file##*/}, skipped"
-    return 0
-  fi
-  CHANGES+=("$key: ${cur:-unset} -> $val")
-  [[ "${4:-}" == quote ]] && val="\"$val\""
-  esc="${val//\\/\\\\}"; esc="${esc//&/\\&}"; esc="${esc//|/\\|}"
-  sed -i "s|^${key//./\\.}[[:space:]]*=.*|$key = $esc|" "$file"
-}
-
 interactive_config() {
   local M="$SERVER/bin/mangosd.conf" R="$SERVER/bin/realmd.conf" RATE="$SERVER/bin/rate.conf"
   [[ -f "$M" && -f "$R" ]] || die "no configs in server/bin yet; run: $0 setup"
   trap 'printf "\033[?25h\n"; exit 130' INT
+  # A skipped key is reported in the gutter here, not in the log prefix the
+  # other modes speak in.
+  local CONF_WARN=ui_warn
 
   # realm name/address live in the turtle_logon DB; bring it up if it exists
   local have_db=0 rname="" raddr=""
@@ -922,10 +767,7 @@ interactive_config() {
 
   if (( have_db )); then
     ui_text "Realm name (shown in the in-game realm list)" "$rname"
-    if [[ "$ANSWER" != "$rname" ]]; then
-      DB -e "UPDATE turtle_logon.realmlist SET name='${ANSWER//\'/\'\'}'"
-      CHANGES+=("realm name: $rname -> $ANSWER")
-    fi
+    set_realm_name "$ANSWER" || ui_warn "the realm name is still $rname"
 
     local defidx=0; [[ -n "$raddr" && "$raddr" != 127.0.0.1 ]] && defidx=1
     ui_select "Who can connect?" "$defidx" \
@@ -1203,36 +1045,33 @@ stop_all() {
 # -----------------------------------------------------------------------------
 # Run: DB (background) -> realmd (background) -> mangosd (foreground console)
 # -----------------------------------------------------------------------------
+# Each piece is started by the same numbered script the manual path uses, so
+# there is one way to start a database and one way to start a login server. Only
+# the ordering, the waiting and the handover are this function's own.
 run_all() {
   [[ -x "$SERVER/bin/mangosd" ]] || die "no native binaries yet; run: $0 setup"
+  local s
+  for s in 1-start-mysql 2-realm-server 3-world-server; do
+    [[ -x "$SERVER/$s.sh" ]] || die "$SERVER/$s.sh is missing or not executable;
+  restore it from the repo (chmod +x)."
+  done
+
   start_native_db
   say "MariaDB ready on $TWOW_DB_HOST:$TWOW_DB_PORT"
-  # Checked at every start rather than at seeding alone: a database restored
-  # from any older backup carries the same stale date, and so does one seeded
-  # before this check existed.
-  fix_stale_maintenance
 
-  # "Something is listening" is not "our login server is up". A stranger on
-  # 3724 is reported rather than adopted, since starting the world against
-  # another realm's login server fails much later, with nothing pointing here.
-  if port_taken_by_other 3724; then
-    die "port 3724 is held by something that is not this server's realmd.
-  Another install of this kit, a repack still running under wine, or a virtual
-  machine forwarding the port? Stop it, then start again. What holds it:
-  ss -tlnp | grep ':3724 '"
+  local port; port=$(conf_get "$SERVER/bin/realmd.conf" RealmServerPort); port=${port:-3724}
+  assert_port_ours "$port" realmd
+  if [[ -z "$(our_listener "$port")" ]]; then
+    ( cd "$SERVER" && nohup ./2-realm-server.sh > "$SERVER/logs/realmd.out" 2>&1 & )
+    local i; for i in $(seq 1 15); do [[ -n "$(our_listener "$port")" ]] && break; sleep 1; done
+    [[ -n "$(our_listener "$port")" ]] || die "realmd did not come up. Last lines of ${SERVER#"$ROOT"/}/logs/realmd.out:
+
+$(tail -n 15 "$SERVER/logs/realmd.out" 2>/dev/null | sed 's/^/  /')"
   fi
-  if [[ -z "$(our_listener 3724)" ]]; then
-    ( cd "$SERVER/bin" && nohup ./realmd -c realmd.conf > "$SERVER/logs/realmd.out" 2>&1 & )
-    local i; for i in $(seq 1 15); do [[ -n "$(our_listener 3724)" ]] && break; sleep 1; done
-    [[ -n "$(our_listener 3724)" ]] || die "realmd did not come up, see $SERVER/logs/realmd.out"
-  fi
-  say "realmd ready on 3724 (pid $(our_listener 3724))"
+  say "realmd ready on $port (pid $(our_listener "$port"))"
 
   say "starting mangosd in the foreground; this terminal is the server console"
   say "first boot loads all maps and takes a few minutes; stop with Ctrl+C"
-  [[ -x "$SERVER/3-world-server.sh" ]] \
-    || die "$SERVER/3-world-server.sh is missing or not executable;
-  restore it (chmod +x) or start manually: cd $SERVER/bin && ./mangosd -c mangosd.conf"
   # Called rather than exec'd, and the note printed after it rather than from an
   # EXIT trap: exec replaces this shell outright, so a trap set here would never
   # run and nothing would say what was left behind.
@@ -1288,10 +1127,11 @@ ${C_BOLD}Modes:${C_RST}
   ${C_GREEN}status${C_RST}         what is running: database, realmd, world, and their ports
   ${C_GREEN}stop${C_RST}           stop the world, then realmd, then the database, in that
                  order; safe to run when some of them are already down
-  ${C_GREEN}realm${C_RST} <address> [--bind <address>]
+  ${C_GREEN}realm${C_RST} <address> [--bind <address>] | --name <name>
                  set what clients are told to connect to, writing both the
                  realm address and BindIP so the two agree. 127.0.0.1 keeps
-                 the realm to this machine.
+                 the realm to this machine. --name sets what the realm list
+                 calls this server, offered once during setup as well.
                  ${C_DIM}--bind overrides what the server listens on, which
                  only differs behind a port forward; setup-vm.sh passes
                  0.0.0.0 because qemu's forwards never reach the guest's
@@ -1309,8 +1149,8 @@ ${C_BOLD}Files:${C_RST}
   server/bin/rate.conf       Turtle's per-level-bracket kill XP tuning
   server/README.linux.md     day-to-day operation guide
 
-First boot: setup offers you a game master account of your own, and points
-client/realmlist.wtf at this realm. Run '$0 account' to make another.
+First boot: setup offers a name for the realm and a game master account of your
+own, and points client/realmlist.wtf at this realm. '$0 account' makes another.
 See README.md for what to download before the first run.
 
 EOF
@@ -1322,14 +1162,20 @@ EOF
 detect_distro   # package names and the daemon hint, whatever mode we run
 
 mode="${1:-all}"
+# What a message suggesting an environment variable should tell the reader to
+# re-run; the kit prints those and cannot know the mode by itself.
+KIT_RERUN="$0 $mode"
 case "$mode" in
   setup|all)
     check_deps; ensure_repack; ensure_mapdata; ensure_source; ensure_ace
     ensure_binaries; fix_configs; fix_client; ensure_database; ensure_migrations
     sync_client_realmlist
-    # Only worth asking where someone is there to answer, and only until they
-    # have an account of their own.
-    if [[ -t 0 ]] && ! has_own_gm; then make_gm_account; fi
+    # Only worth asking where someone is there to answer, and each only until it
+    # has been answered once.
+    if [[ -t 0 ]]; then
+      offer_realm_name
+      has_own_gm || make_gm_account
+    fi
     say "conversion complete"
     say "customize the server anytime with: $0 interactive"
     if [[ "$mode" == all ]]; then run_all "${@:2}"; fi
@@ -1352,9 +1198,17 @@ case "$mode" in
     check_deps; resolve_db_port; start_native_db; ensure_db_credentials; assert_own_database
     [[ -n "${2:-}" ]] \
       || die "usage: $0 realm <address> [--bind <address>]
+         $0 realm --name <name>
   <address> is what clients are told to connect to; 127.0.0.1 keeps the realm
   to this machine. --bind overrides what the server listens on, which only
-  differs behind a port forward."
+  differs behind a port forward. --name sets what the realm list calls it."
+    if [[ "$2" == --name ]]; then
+      [[ -n "${3:-}" ]] || die "--name needs a realm name"
+      set_realm_name "$3" || exit 1
+      say "the realm is called $3"
+      say "restart the server to apply: $0 run"
+      exit 0
+    fi
     case "${3:-}" in
       "")     set_realm_address "$2" || exit 1 ;;
       --bind) [[ -n "${4:-}" ]] || die "--bind needs an address"

@@ -4,23 +4,23 @@
 # WARNING: turtle_world.sql is a snapshot; the compiled server may expect a
 # newer schema. Always run ./apply-db-updates.sh after this import.
 set -euo pipefail
-cd "$(dirname "$(readlink -f "$0")")"
+SERVER="$(dirname "$(readlink -f "$0")")"
+ROOT="$(dirname "$SERVER")"
+KIT_TAG=import
+KIT_RERUN="$0"
+[[ -r "$ROOT/lib/kit.sh" ]] \
+  || { printf 'lib/kit.sh is missing beside this folder; restore it from the repo\n' >&2; exit 1; }
+# shellcheck source=../lib/kit.sh
+. "$ROOT/lib/kit.sh"
+cd "$SERVER"
 
-# db.env carries the port setup-native.sh settled on, which is not 3306 when a
-# system MariaDB already holds that one.
-# shellcheck source=/dev/null
-[ -f ./db.env ] && . ./db.env
-TWOW_DB_HOST=${TWOW_DB_HOST:-127.0.0.1}
-TWOW_DB_PORT=${TWOW_DB_PORT:-3306}
-TWOW_DB_USER=${TWOW_DB_USER:-root}
-TWOW_DB_PASS=${TWOW_DB_PASS:-mangos}
+[[ -f turtle_world.sql ]] || die "turtle_world.sql is not in server/; it comes with the repack."
+mariadb_running || die "the database is not running; start it with: ./1-start-mysql.sh"
 
-MYSQL=(mariadb -h "$TWOW_DB_HOST" -P "$TWOW_DB_PORT" -u "$TWOW_DB_USER" -p"$TWOW_DB_PASS" --max-allowed-packet=128M)
+say "dropping and recreating turtle_world"
+DB -e "DROP DATABASE IF EXISTS turtle_world; CREATE DATABASE turtle_world CHARACTER SET utf8mb4;"
 
-echo "Dropping and recreating turtle_world..."
-"${MYSQL[@]}" -e "DROP DATABASE IF EXISTS turtle_world; CREATE DATABASE turtle_world CHARACTER SET utf8mb4;"
+say "importing turtle_world.sql ($(du -h turtle_world.sql | cut -f1), this takes a while)"
+DB turtle_world < turtle_world.sql
 
-echo "Importing turtle_world.sql (182 MB, this takes a while)..."
-"${MYSQL[@]}" turtle_world < turtle_world.sql
-
-echo "Import done."
+say "import done; now run ./apply-db-updates.sh"

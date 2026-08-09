@@ -24,9 +24,17 @@ Everything server-side runs natively. No Wine in the server stack.
   with realmlist already pointing at 127.0.0.1. TurtleWoW.exe must not be
   started; it patches the client and requires WebView2.
 
-## Start order (every session)
+## Starting the server (every session)
 
-Three terminals, in this order, each started once the previous one is ready:
+One command does all three, the database and login server in the background and
+the world console in front:
+
+```
+../setup-native.sh run [loglevel]
+```
+
+The three pieces also start on their own, one per terminal, which keeps their
+logs apart:
 
 1. `./1-start-mysql.sh`   - ready at "ready for connections"
 2. `./2-realm-server.sh`  - ready at "Login server is up and running"
@@ -36,6 +44,11 @@ Three terminals, in this order, each started once the previous one is ready:
    launch (0 near-silent, 1 errors only, 2 detail, 3 debug). Same argument
    works on `setup-native.sh run [loglevel]`. Log files keep their own
    detail via LogFileLevel.
+
+Either way the same scripts run, and the order is checked rather than assumed:
+each refuses to start without the piece below it, and names what is missing.
+`TWOW_SKIP_PREFLIGHT=1` starts anyway, for a database or login server these
+checks do not describe. Every script takes `--help`.
 
 Login: admin / admin (see README.txt; the password is meant to be replaced).
 
@@ -57,6 +70,9 @@ before the world is stopped for maintenance, and removed afterwards.
   database does not have yet. Required after an import, and after every git pull
   and rebuild.
 - `./clear-logs.sh`: empties the logs/ folder.
+
+All of them read `../lib/kit.sh`, which holds the logging, the database handle
+and the port and process checks they share with `setup-native.sh`.
 
 ## Updating
 

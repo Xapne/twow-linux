@@ -6,18 +6,18 @@
 # Run this after import-world-db.sh, and after every git pull + rebuild.
 set -euo pipefail
 HERE="$(dirname "$(readlink -f "$0")")"
-cd "$HERE/../src/sql/database_updates"
-
-# db.env carries the port setup-native.sh settled on, which is not 3306 when a
-# system MariaDB already holds that one.
-# shellcheck source=/dev/null
-[ -f "$HERE/db.env" ] && . "$HERE/db.env"
-TWOW_DB_HOST=${TWOW_DB_HOST:-127.0.0.1}
-TWOW_DB_PORT=${TWOW_DB_PORT:-3306}
-TWOW_DB_USER=${TWOW_DB_USER:-root}
-TWOW_DB_PASS=${TWOW_DB_PASS:-mangos}
-
-DB() { mariadb -h "$TWOW_DB_HOST" -P "$TWOW_DB_PORT" -u "$TWOW_DB_USER" -p"$TWOW_DB_PASS" --max-allowed-packet=128M "$@"; }
+SERVER="$HERE"
+ROOT="$(dirname "$HERE")"
+KIT_TAG=migrate
+KIT_RERUN="$0"
+[[ -r "$ROOT/lib/kit.sh" ]] \
+  || { printf 'lib/kit.sh is missing beside this folder; restore it from the repo\n' >&2; exit 1; }
+# shellcheck source=../lib/kit.sh
+. "$ROOT/lib/kit.sh"
+[[ -d "$ROOT/src/sql/database_updates" ]] \
+  || die "no source checkout in src/, which is where the migrations live:
+  $ROOT/setup-native.sh setup"
+cd "$ROOT/src/sql/database_updates"
 
 # Gives a colliding INSERT the migration's newer values by appending
 # ON DUPLICATE KEY UPDATE over exactly the columns the statement names, so
