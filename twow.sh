@@ -1569,7 +1569,8 @@ show_logs() {  # $1 kind, $2 --follow
     *" $kind "*) ;;
     *) die "unknown log '$kind'; one of: $LOG_KINDS" ;;
   esac
-  p=$(log_path "$kind") && [[ -n "$p" && -f "$p" ]] \
+  p=$(log_path "$kind") || p=""
+  [[ -n "$p" && -f "$p" ]] \
     || die "no $kind log written yet; it appears once that server has run"
   if [[ "${2:-}" == -f || "${2:-}" == --follow ]]; then
     say "following ${p#"$ROOT"/}; Ctrl+C stops watching, the server keeps running"
