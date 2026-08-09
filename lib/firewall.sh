@@ -62,7 +62,10 @@ fw_offer_ports() {  # $@ ports
   be=$(fw_backend)
   [[ -n "$be" ]] || return 0
   for p in "$@"; do
-    fw_port_state "$be" "$p"; rc=$?
+    # A closed port and an unreadable one are answers, not failures. Taking the
+    # status from a bare call lets set -e end the run on both, which is every
+    # case this function exists for.
+    rc=0; fw_port_state "$be" "$p" || rc=$?
     (( rc == 0 )) && continue
     (( rc == 2 )) && unsure=1
     closed+=("$p")
