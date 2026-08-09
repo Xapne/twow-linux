@@ -466,16 +466,19 @@ fix_client() {
   fi
 }
 
-# Where the realm answers is settled once, in turtle_logon.realmlist, which
-# interactive mode writes when it asks about LAN play. The client reads
-# client/realmlist.wtf, so it is brought to the same address rather than asked
-# again; a client carried over from the live game points at Turtle's own login
-# server otherwise, and connects there instead of here.
+# What the realm advertises now, read by everything that writes it, by the
+# client's realmlist.wtf below, and by the question that offers to move it.
+realm_address() { DB -N -B -e "SELECT address FROM turtle_logon.realmlist ORDER BY id LIMIT 1" 2>/dev/null; }
+
+# Where the realm answers is settled once, in turtle_logon.realmlist, which the
+# LAN question writes. The client reads client/realmlist.wtf, so it is brought
+# to the same address rather than asked again; a client carried over from the
+# live game points at Turtle's own login server otherwise, and connects there
+# instead of here.
 sync_client_realmlist() {
   local f="$ROOT/client/realmlist.wtf" addr cur want
   [[ -d "$ROOT/client" ]] || return 0
-  addr=$(DB -N -B -e "SELECT address FROM turtle_logon.realmlist ORDER BY id LIMIT 1" 2>/dev/null) \
-    || return 0
+  addr=$(realm_address) || return 0
   [[ -n "$addr" ]] || return 0
   want="set realmlist $addr"
   cur=$(head -1 "$f" 2>/dev/null | tr -d '\r')
@@ -506,7 +509,7 @@ set_realm_address() {
   if [[ -z "$bind" ]]; then
     bind=0.0.0.0; [[ "$addr" == 127.0.0.1 ]] && bind=127.0.0.1
   fi
-  cur=$(DB -N -B -e "SELECT address FROM turtle_logon.realmlist ORDER BY id LIMIT 1" 2>/dev/null) || cur=""
+  cur=$(realm_address) || cur=""
   if [[ "$addr" != "$cur" ]]; then
     DB -e "UPDATE turtle_logon.realmlist SET address='$addr'" \
       || { warn "could not write the realm address into turtle_logon.realmlist"; return 1; }
@@ -558,13 +561,44 @@ offer_realm_name() {
   fi
 }
 
+# How far the realm reaches. The firewall offer follows a LAN answer, a closed
+# port being the remaining thing between an addressed realm and a client on the
+# network.
+# $1 the address in place, so the list opens on it
+offer_realm_address() {
+  local cur=${1:-} lanip="" defidx=0 CONF_WARN=ui_warn
+  [[ -n "$cur" && "$cur" != 127.0.0.1 ]] && defidx=1
+  ui_select "Who can connect?" "$defidx" \
+    "Only this machine (127.0.0.1)" \
+    "My local network (LAN play)"
+  if (( ANSWER == 0 )); then
+    set_realm_address 127.0.0.1 || ui_warn "leaving the realm address unchanged"
+    return 0
+  fi
+  (( defidx )) && lanip="$cur"
+  [[ -n "$lanip" ]] || lanip="$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+' || true)"
+  ui_text "This machine's LAN IP (clients connect here)" "${lanip:-192.168.?.?}"
+  if set_realm_address "$ANSWER"; then
+    fw_offer_ports "$(realm_port)" "$(world_port)"
+  else
+    ui_warn "leaving the realm address unchanged"
+  fi
+}
+
 # What a finished install still has to ask, listed once. setup-vm.sh runs the
 # conversion detached, which leaves it without a terminal, and calls this over
 # one afterwards, so a question added here reaches every path.
 #
 # Each is asked only until it has been answered: a repeated run is silent.
 first_run_questions() {
+  local addr bind
   offer_realm_name
+  # Asked while the realm sits on the loopback the repack ships and is bound to
+  # it. A wider bind under the same address is a port forward, which setup-vm.sh
+  # arranges before this runs.
+  addr=$(realm_address) || addr=""
+  bind=$(conf_get "$SERVER/bin/realmd.conf" BindIP 2>/dev/null) || bind=""
+  [[ "$addr" == 127.0.0.1 && "$bind" == 127.0.0.1 ]] && offer_realm_address "$addr"
   has_own_gm || make_gm_account
 }
 
@@ -881,9 +915,9 @@ interactive_config() {
   local have_db=0 rname="" raddr=""
   if [[ -d "$SERVER/db/mysql" ]]; then
     start_native_db
-    if rname="$(DB -N -e 'SELECT name FROM turtle_logon.realmlist LIMIT 1' 2>/dev/null)"; then
+    if rname="$(realm_name)"; then
       have_db=1
-      raddr="$(DB -N -e 'SELECT address FROM turtle_logon.realmlist LIMIT 1' 2>/dev/null)" || raddr=""
+      raddr="$(realm_address)" || raddr=""
     fi
   fi
 
@@ -895,26 +929,7 @@ interactive_config() {
     ui_text "Realm name (shown in the in-game realm list)" "$rname"
     set_realm_name "$ANSWER" || ui_warn "the realm name is still $rname"
 
-    local defidx=0; [[ -n "$raddr" && "$raddr" != 127.0.0.1 ]] && defidx=1
-    ui_select "Who can connect?" "$defidx" \
-      "Only this machine (127.0.0.1)" \
-      "My local network (LAN play)"
-    if (( ANSWER == 1 )); then
-      local lanip=""
-      [[ -n "$raddr" && "$raddr" != 127.0.0.1 ]] && lanip="$raddr"
-      [[ -n "$lanip" ]] || lanip="$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+' || true)"
-      ui_text "This machine's LAN IP (clients connect here)" "${lanip:-192.168.?.?}"
-      if set_realm_address "$ANSWER"; then
-        # Only now: a realm nobody outside can reach is the point of the
-        # question just answered, and a firewall is the usual reason it stays
-        # unreachable after everything here is set correctly.
-        fw_offer_ports "$(realm_port)" "$(world_port)"
-      else
-        ui_warn "leaving the realm address unchanged"
-      fi
-    else
-      set_realm_address 127.0.0.1
-    fi
+    offer_realm_address "$raddr"
   else
     ui_note "realm name/address live in the database, which is not initialized yet;"
     ui_note "run '$0 setup' first, then come back here"
@@ -1282,8 +1297,9 @@ ${C_BOLD}Files:${C_RST}
   server/bin/rate.conf       Turtle's per-level-bracket kill XP tuning
   server/README.linux.md     day-to-day operation guide
 
-First boot: setup offers a name for the realm and a game master account of your
-own, and points client/realmlist.wtf at this realm. '$0 account' makes another.
+First boot: setup offers a name for the realm, who can reach it, and a game
+master account of your own, and points client/realmlist.wtf at this realm.
+'$0 account' makes another.
 See README.md for what to download before the first run.
 
 EOF
@@ -1303,8 +1319,9 @@ case "$mode" in
     check_deps; ensure_repack; ensure_mapdata; ensure_source; ensure_ace
     ensure_binaries; fix_configs; fix_client; ensure_database; clean_seed_leftovers
     ensure_migrations
-    sync_client_realmlist
     [[ -t 0 ]] && first_run_questions
+    # Last, so the client follows an address the LAN question may have moved.
+    sync_client_realmlist
     say "conversion complete"
     say "customize the server anytime with: $0 interactive"
     if [[ "$mode" == all ]]; then run_all "${@:2}"; fi

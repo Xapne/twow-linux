@@ -164,12 +164,13 @@ the world database, and applies any new schema migrations (stop the world
 server first). `./setup-native.sh help` shows all modes. Day-to-day
 operation is documented in `server/README.linux.md`.
 
-First boot: setup offers a name for the realm and a game master account, and
-points `client/realmlist.wtf` at this realm so the client reaches your server
-rather than Turtle's. `./setup-native.sh account` creates further accounts, and
-the world console takes `account create <name> <pass>` just as well. The name
-can be changed later with `./setup-native.sh realm --name <name>` or from the
-interactive screen. The realm shows OFFLINE in the realm list on local servers;
+First boot: setup offers a name for the realm, who can reach it, and a game
+master account, and points `client/realmlist.wtf` at this realm; a client
+carried over from the live game arrives pointed at Turtle's own login server.
+`./setup-native.sh account` creates further accounts, and the world console
+takes `account create <name> <pass>` just as well. The name can be changed later
+with `./setup-native.sh realm --name <name>`, the address with
+`./setup-native.sh realm <address>`, or both from the interactive screen. The realm shows OFFLINE in the realm list on local servers;
 that is cosmetic.
 
 ## Credits

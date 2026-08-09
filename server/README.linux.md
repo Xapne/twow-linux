@@ -87,6 +87,7 @@ and the port and process checks they share with `setup-native.sh`.
   With stdin closed (background or service) it shuts down right after startup;
   for a systemd unit, Console.Enable = 0 is set in bin/mangosd.conf instead.
 - Ports: MySQL per `db.env` (3306 unless taken), 3724 realmd (auth), 8091
-  mangosd (world), all bound to 127.0.0.1. LAN play is covered in Section 14 of
-  the setup guide (BindIP, HostAddressOverride in bin/realmd.conf, and the
-  realmlist table address).
+  mangosd (world). The bind follows the realm's address, asked at first boot and
+  changed with `./setup-native.sh realm <address>`; Section 14 of the setup guide
+  covers the same by hand (BindIP, HostAddressOverride in bin/realmd.conf, and
+  the realmlist table address).
