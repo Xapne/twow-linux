@@ -727,6 +727,83 @@ ensure_database() {
 }
 
 # -----------------------------------------------------------------------------
+# characters the repack's dump carries from the server it was sliced out of
+# -----------------------------------------------------------------------------
+# turtle_char arrives with six level 60s whose accounts stayed behind and two
+# pets whose owners were deleted before the export. Guids are handed out from
+# MAX(guid)+1, which lands on one of those owners, so the first character
+# created adopts a stray pet whatever its class.
+#
+# Only what the dump brought with it is in scope: a character with an account
+# stays, and so does a pet whose owner exists. The list covers every table in
+# this schema keyed on a character guid, plus the pet tables.
+clean_seed_leftovers() {
+  local before after
+  before=$(DB -N -B -e "SELECT
+      (SELECT COUNT(*) FROM turtle_char.characters c
+         LEFT JOIN turtle_logon.account a ON a.id = c.account WHERE a.id IS NULL)
+    + (SELECT COUNT(*) FROM turtle_char.character_pet p
+         LEFT JOIN turtle_char.characters c ON c.guid = p.owner WHERE c.guid IS NULL)" 2>/dev/null) || return 0
+  [[ "$before" =~ ^[0-9]+$ ]] || return 0
+  (( before > 0 )) || return 0
+
+  DB turtle_char <<'SQL' >/dev/null 2>&1 || { warn "could not clear the dump's leftover characters; they are harmless apart from a stray pet"; return 0; }
+CREATE TEMPORARY TABLE twow_gone (guid INT UNSIGNED PRIMARY KEY);
+INSERT INTO twow_gone
+  SELECT c.guid FROM characters c
+    LEFT JOIN turtle_logon.account a ON a.id = c.account WHERE a.id IS NULL;
+
+DELETE t FROM character_account_data     t JOIN twow_gone g ON g.guid = t.guid;
+DELETE t FROM character_action           t JOIN twow_gone g ON g.guid = t.guid;
+DELETE t FROM character_armory_stats     t JOIN twow_gone g ON g.guid = t.guid;
+DELETE t FROM character_aura             t JOIN twow_gone g ON g.guid = t.guid;
+DELETE t FROM character_aura_suspended   t JOIN twow_gone g ON g.guid = t.guid;
+DELETE t FROM character_battleground_data t JOIN twow_gone g ON g.guid = t.guid;
+DELETE t FROM character_forgotten_skills t JOIN twow_gone g ON g.guid = t.guid;
+DELETE t FROM character_gifts            t JOIN twow_gone g ON g.guid = t.guid;
+DELETE t FROM character_homebind         t JOIN twow_gone g ON g.guid = t.guid;
+DELETE t FROM character_honor_cp         t JOIN twow_gone g ON g.guid = t.guid;
+DELETE t FROM character_instance         t JOIN twow_gone g ON g.guid = t.guid;
+DELETE t FROM character_inventory        t JOIN twow_gone g ON g.guid = t.guid;
+DELETE t FROM character_item_logs        t JOIN twow_gone g ON g.guid = t.playerLowGuid;
+DELETE t FROM character_queststatus      t JOIN twow_gone g ON g.guid = t.guid;
+DELETE t FROM character_reputation       t JOIN twow_gone g ON g.guid = t.guid;
+DELETE t FROM character_skills           t JOIN twow_gone g ON g.guid = t.guid;
+DELETE t FROM character_social           t JOIN twow_gone g ON g.guid = t.guid;
+DELETE t FROM character_social           t JOIN twow_gone g ON g.guid = t.friend;
+DELETE t FROM character_spell            t JOIN twow_gone g ON g.guid = t.guid;
+DELETE t FROM character_spell_cooldown   t JOIN twow_gone g ON g.guid = t.guid;
+DELETE t FROM character_spell_dual_spec  t JOIN twow_gone g ON g.guid = t.guid;
+DELETE t FROM character_stats            t JOIN twow_gone g ON g.guid = t.guid;
+DELETE t FROM character_ticket           t JOIN twow_gone g ON g.guid = t.guid;
+DELETE t FROM character_titles           t JOIN twow_gone g ON g.guid = t.guid;
+DELETE t FROM character_transmogs        t JOIN twow_gone g ON g.guid = t.guid;
+DELETE t FROM character_xp_from_log      t JOIN twow_gone g ON g.guid = t.guid;
+DELETE t FROM corpse                     t JOIN twow_gone g ON g.guid = t.player;
+DELETE t FROM gm_surveys                 t JOIN twow_gone g ON g.guid = t.guid;
+DELETE t FROM gm_tickets                 t JOIN twow_gone g ON g.guid = t.guid;
+DELETE t FROM guild_bank_log             t JOIN twow_gone g ON g.guid = t.player;
+DELETE t FROM guild_member               t JOIN twow_gone g ON g.guid = t.guid;
+DELETE t FROM item_instance              t JOIN twow_gone g ON g.guid = t.owner_guid;
+DELETE t FROM mail_items                 t JOIN twow_gone g ON g.guid = t.receiver;
+DELETE t FROM mail                       t JOIN twow_gone g ON g.guid = t.receiver;
+DELETE t FROM characters                 t JOIN twow_gone g ON g.guid = t.guid;
+
+DELETE p FROM character_pet p LEFT JOIN characters c ON c.guid = p.owner WHERE c.guid IS NULL;
+DELETE t FROM pet_aura          t LEFT JOIN character_pet p ON p.id = t.guid WHERE p.id IS NULL;
+DELETE t FROM pet_spell         t LEFT JOIN character_pet p ON p.id = t.guid WHERE p.id IS NULL;
+DELETE t FROM pet_spell_cooldown t LEFT JOIN character_pet p ON p.id = t.guid WHERE p.id IS NULL;
+SQL
+
+  after=$(DB -N -B -e "SELECT
+      (SELECT COUNT(*) FROM turtle_char.characters c
+         LEFT JOIN turtle_logon.account a ON a.id = c.account WHERE a.id IS NULL)
+    + (SELECT COUNT(*) FROM turtle_char.character_pet p
+         LEFT JOIN turtle_char.characters c ON c.guid = p.owner WHERE c.guid IS NULL)" 2>/dev/null) || after=0
+  say "cleared $(( before - after )) leftover row(s) the repack's character dump arrived with"
+}
+
+# -----------------------------------------------------------------------------
 # bring the world DB schema up to what the compiled source expects
 # -----------------------------------------------------------------------------
 ensure_migrations() {
@@ -1170,7 +1247,8 @@ KIT_RERUN="$0 $mode"
 case "$mode" in
   setup|all)
     check_deps; ensure_repack; ensure_mapdata; ensure_source; ensure_ace
-    ensure_binaries; fix_configs; fix_client; ensure_database; ensure_migrations
+    ensure_binaries; fix_configs; fix_client; ensure_database; clean_seed_leftovers
+    ensure_migrations
     sync_client_realmlist
     # Only worth asking where someone is there to answer, and each only until it
     # has been answered once.
