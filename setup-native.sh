@@ -568,14 +568,14 @@ first_run_questions() {
   has_own_gm || make_gm_account
 }
 
-# The repack ships ADMIN and TEST at rank 4, so the server never lacks a game
-# master; what a new one lacks is an account belonging to whoever set it up.
+# Whether a game master account already exists. The repack's own pair is deleted
+# during setup, and one that survives it kept its place by having its password
+# changed, which makes it somebody's own; either way what is left here counts.
 # Asking only while there is none keeps a repeated setup quiet.
-STOCK_ACCOUNTS="'ADMIN','TEST'"
 has_own_gm() {
   local n
   n=$(DB -N -B -e "SELECT COUNT(*) FROM turtle_logon.account
-        WHERE \`rank\` >= 3 AND username NOT IN ($STOCK_ACCOUNTS)" 2>/dev/null) || return 1
+        WHERE \`rank\` >= 3" 2>/dev/null) || return 1
   [[ "$n" =~ ^[0-9]+$ ]] && ((n > 0))
 }
 
@@ -758,28 +758,34 @@ ensure_database() {
 # changed is somebody's own and stays, as does a character with an account and
 # a pet whose owner exists. Removing the two accounts leaves their characters
 # ownerless, which is what the sweep below is for, so the order matters.
-clean_seed_leftovers() {
-  local before after stock
-  stock=$(DB -N -B -e "SELECT COUNT(*) FROM turtle_logon.account
-      WHERE username IN ('ADMIN','TEST')
-        AND sha_pass_hash = UPPER(SHA1(CONCAT(username, ':', username)))" 2>/dev/null) || stock=0
-  before=$(DB -N -B -e "SELECT
-      (SELECT COUNT(*) FROM turtle_logon.account
-         WHERE username IN ('ADMIN','TEST')
-           AND sha_pass_hash = UPPER(SHA1(CONCAT(username, ':', username))))
+# The pair the repack ships, recognised by the password it set them: an account
+# whose password has been changed belongs to whoever changed it.
+SEED_STOCK="username IN ('ADMIN','TEST')
+        AND sha_pass_hash = UPPER(SHA1(CONCAT(username, ':', username)))"
+
+# What the dump still has here, counted one way so the before and after of the
+# sweep can be subtracted honestly.
+seed_leftovers() {
+  DB -N -B -e "SELECT
+      (SELECT COUNT(*) FROM turtle_logon.account WHERE $SEED_STOCK)
     + (SELECT COUNT(*) FROM turtle_char.characters c
          LEFT JOIN turtle_logon.account a ON a.id = c.account WHERE a.id IS NULL)
     + (SELECT COUNT(*) FROM turtle_char.character_pet p
-         LEFT JOIN turtle_char.characters c ON c.guid = p.owner WHERE c.guid IS NULL)" 2>/dev/null) || return 0
+         LEFT JOIN turtle_char.characters c ON c.guid = p.owner WHERE c.guid IS NULL)" 2>/dev/null
+}
+
+clean_seed_leftovers() {
+  local before after stock
+  stock=$(DB -N -B -e "SELECT COUNT(*) FROM turtle_logon.account WHERE $SEED_STOCK" 2>/dev/null) || stock=0
+  before=$(seed_leftovers) || return 0
   [[ "$before" =~ ^[0-9]+$ ]] || return 0
   (( before > 0 )) || return 0
 
-  DB turtle_char <<'SQL' >/dev/null 2>&1 || { warn "could not clear what the repack's dump left behind; ADMIN and TEST may still be able to log in"; return 0; }
+  DB turtle_char <<SQL >/dev/null 2>&1 || { warn "could not clear what the repack's dump left behind; ADMIN and TEST may still be able to log in"; return 0; }
 CREATE TEMPORARY TABLE twow_stock (id INT UNSIGNED PRIMARY KEY);
 INSERT INTO twow_stock
   SELECT id FROM turtle_logon.account
-   WHERE username IN ('ADMIN','TEST')
-     AND sha_pass_hash = UPPER(SHA1(CONCAT(username, ':', username)));
+   WHERE $SEED_STOCK;
 
 DELETE t FROM turtle_logon.account_ip_logins  t JOIN twow_stock s ON s.id = t.account_id;
 DELETE t FROM turtle_logon.account_banned     t JOIN twow_stock s ON s.id = t.id;
@@ -840,14 +846,7 @@ DELETE t FROM pet_spell_cooldown t LEFT JOIN character_pet p ON p.id = t.guid WH
 ALTER TABLE turtle_logon.account AUTO_INCREMENT = 1;
 SQL
 
-  after=$(DB -N -B -e "SELECT
-      (SELECT COUNT(*) FROM turtle_logon.account
-         WHERE username IN ('ADMIN','TEST')
-           AND sha_pass_hash = UPPER(SHA1(CONCAT(username, ':', username))))
-    + (SELECT COUNT(*) FROM turtle_char.characters c
-         LEFT JOIN turtle_logon.account a ON a.id = c.account WHERE a.id IS NULL)
-    + (SELECT COUNT(*) FROM turtle_char.character_pet p
-         LEFT JOIN turtle_char.characters c ON c.guid = p.owner WHERE c.guid IS NULL)" 2>/dev/null) || after=0
+  after=$(seed_leftovers) || after=0
   say "cleared $(( before - after )) row(s) the repack's dump arrived with; the realm starts empty"
   (( stock > 0 )) && say "ADMIN and TEST are gone with it; an account keeps its place here once its password is changed"
   return 0
@@ -1004,12 +1003,12 @@ update_all() {
   # pgrep -x never matches it; match the command line instead.
   if world_running; then
     die "the world server is running; stop it first.
-  In its console: Ctrl+C. Detached: pkill -TERM -f 'mangosd -c'
+  In its console: Ctrl+C. Detached: pkill -TERM -f '$WORLD_PROC'
   SIGINT is the core's restart signal; with pkill -INT the world is only restarted.
   Swapping schema under a live server is how characters get eaten."
   fi
-  if pgrep -f 'realmd -c' >/dev/null 2>&1; then
-    pkill -INT -f 'realmd -c'; sleep 1
+  if realm_running; then
+    pkill -INT -f "$REALM_PROC"; sleep 1
     say "stopped realmd (a running binary cannot be replaced)"
   fi
 
@@ -1146,7 +1145,7 @@ stop_all() {
     say "stopping the world server"
     # SIGTERM is the core's clean shutdown (SIGINT is its restart signal, which
     # the run wrapper would answer by starting the world again).
-    pkill -TERM -f 'mangosd -c' 2>/dev/null || true
+    pkill -TERM -f "$WORLD_PROC" 2>/dev/null || true
     for i in $(seq 1 60); do world_running || break; sleep 1; done
     world_running && warn "the world server is still running; it may be saving characters"
   else

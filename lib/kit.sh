@@ -104,9 +104,12 @@ port_free() {
 }
 
 # Both cores rename their main thread ("MainThread" in /proc comm), so process
-# checks have to look at the command line, not the process name.
-world_running() { pgrep -f 'mangosd -c' >/dev/null 2>&1; }
-realm_running() { pgrep -f 'realmd -c' >/dev/null 2>&1; }
+# checks have to look at the command line, not the process name. The patterns
+# are the invocation the start scripts use, and signalling matches on them too.
+WORLD_PROC='mangosd -c'
+REALM_PROC='realmd -c'
+world_running() { pgrep -f "$WORLD_PROC" >/dev/null 2>&1; }
+realm_running() { pgrep -f "$REALM_PROC" >/dev/null 2>&1; }
 
 # The pid holding a port, but only when the binary behind it is one of ours.
 # Anything may listen on 3724: a second install of this kit, a repack still
