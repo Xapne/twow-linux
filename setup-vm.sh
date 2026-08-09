@@ -198,7 +198,9 @@ make_disk() {
   [[ -f "$WORKDIR/$DISK" ]] && { say "VM disk exists (delete $WD/$DISK for a clean rebuild)"; return; }
   say "creating $DISK_SIZE overlay disk on top of the stock image"
   qemu-img create -q -f qcow2 -b "$IMG" -F qcow2 "$WORKDIR/$DISK" "$DISK_SIZE"
-  ( cd "$WORKDIR" && qemu-img rebase -u -b "$IMG" -F qcow2 "$DISK" 2>/dev/null || true )
+  # The rebase rewrites the backing path to a relative one, and a qemu-img too
+  # old for it leaves the absolute path in place, which still boots.
+  ( cd "$WORKDIR" || exit; qemu-img rebase -u -b "$IMG" -F qcow2 "$DISK" 2>/dev/null || true )
   vm_register
 }
 

@@ -28,18 +28,21 @@ for s in "${SCRIPTS[@]}"; do
   if out=$(bash -n "$s" 2>&1); then ok "${s#./}"; else bad "${s#./}"; printf '%s\n' "$out"; fi
 done
 
-stage "shellcheck"
+# The version goes in the heading because releases differ in what they report,
+# and a finding that appears only in CI is read from there first.
 if command -v shellcheck >/dev/null 2>&1; then
+  stage "shellcheck $(shellcheck --version | sed -n 's/^version: //p')"
   # -x follows sourced files, and SCRIPTDIR resolves each 'source=' directive
   # against the script holding it.
   if out=$(shellcheck -x -P SCRIPTDIR "${SCRIPTS[@]}" 2>&1); then
-    ok "$(shellcheck --version | sed -n 's/^version: /shellcheck /p'), no findings"
+    ok "no findings"
   else
-    bad "shellcheck findings"
+    bad "findings"
     printf '%s\n' "$out"
   fi
 else
-  skip "shellcheck is absent; it ships as 'shellcheck' in every major distro"
+  stage "shellcheck"
+  skip "absent here; it ships as 'shellcheck' in every major distro"
 fi
 
 stage "tests"
