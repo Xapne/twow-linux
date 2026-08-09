@@ -65,17 +65,8 @@ need_database mangosd.conf WorldDatabase.Info "the world server"
 need_realmd "the world server"
 
 # Written once the start is going ahead, so a refused one leaves the config as
-# it found it. Quiet levels also mute the per-query SQL echo, which prints at
-# basic level whatever LogLevel says; chatty levels show it.
-if [[ -n "$LEVEL" ]]; then
-  conf_has "$CONF" LogLevel \
-    || die "mangosd.conf has no LogLevel line, so the console level cannot be set here.
-  Add one, or start without an argument to use the config as it stands."
-  conf_set "$CONF" LogLevel "$LEVEL"
-  if (( LEVEL <= 1 )); then sqlfilter=1; else sqlfilter=0; fi
-  conf_set "$CONF" LogFilter_SQLText "$sqlfilter"
-  say "console LogLevel set to $LEVEL, SQL echo $( ((sqlfilter)) && echo off || echo on)"
-fi
+# it found it.
+[[ -n "$LEVEL" ]] && set_console_level "$LEVEL"
 
 # Checked at every start rather than at seeding alone: a database restored from
 # any older backup carries the same stale date.

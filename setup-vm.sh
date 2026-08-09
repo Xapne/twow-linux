@@ -461,7 +461,7 @@ handoff() {
   note "make it yours:       $0 tune   (realm name, rates, LAN play)"
   ui_outro "handing over in 3 seconds"
   sleep 3
-  exec ssh -t "${SSHOPTS[@]}" turtle@127.0.0.1 'cd twow && ./setup-native.sh run 1'
+  exec ssh -t "${SSHOPTS[@]}" turtle@127.0.0.1 'cd twow && ./setup-native.sh run'
 }
 
 # =============================================================================
@@ -785,7 +785,7 @@ main() {
     # The console log level is the kit's argument, passed through rather than
     # fixed at 1: reattaching at 2 or 3 is how anything is diagnosed, and
     # ssh-ing in by hand to do it was the only way before.
-    console) exec ssh -t "${SSHOPTS[@]}" turtle@127.0.0.1 "cd twow && ./setup-native.sh run ${2:-1}";;
+    console) exec ssh -t "${SSHOPTS[@]}" turtle@127.0.0.1 "cd twow && ./setup-native.sh run ${2:-}";;
     tune)    exec ssh -t "${SSHOPTS[@]}" turtle@127.0.0.1 'cd twow && ./setup-native.sh interactive';;
     "") ;;
     *) usage; die "unknown mode: $1";;

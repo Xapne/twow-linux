@@ -171,6 +171,19 @@ conf_set() {
   sed -i "s|^${key//./\\.}[[:space:]]*=.*|$key = $esc|" "$file"
 }
 
+# How much the world console says, 0 through 3. Two keys carry it, since the
+# quiet levels also mute the per-query SQL echo, which prints at basic level
+# whatever LogLevel says. Setup and 3-world-server.sh both set it.
+set_console_level() {  # $1 level 0-3
+  local sqlfilter
+  conf_has "$SERVER/bin/mangosd.conf" LogLevel \
+    || { warn "mangosd.conf has no LogLevel line, so the console level stands as it is"; return 1; }
+  if (( $1 <= 1 )); then sqlfilter=1; else sqlfilter=0; fi
+  conf_set "$SERVER/bin/mangosd.conf" LogLevel "$1"
+  conf_set "$SERVER/bin/mangosd.conf" LogFilter_SQLText "$sqlfilter"
+  say "console LogLevel $1, SQL echo $( ((sqlfilter)) && echo off || echo on)"
+}
+
 # The connection string the core will actually use, as host port user pass db.
 # Asked of the config rather than of db.env because that is what the server
 # reads, and the two disagree when a config was left pointing at 3306 where a
