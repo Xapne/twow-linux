@@ -1,5 +1,7 @@
 # TurtleWoW 1.18.1 repack, native on Linux
 
+[![check](https://github.com/Xapne/twow-linux/actions/workflows/check.yml/badge.svg)](https://github.com/Xapne/twow-linux/actions/workflows/check.yml)
+
 Run the SIGGZ TurtleWoW 1.18.1 server repack as a fully native Linux server:
 native MariaDB, native `realmd` and `mangosd` compiled from the same source
 the repack is built from (Penqle's tortoise-wow, branch 1181dev). No Wine in
