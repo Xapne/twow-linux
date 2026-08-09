@@ -33,6 +33,20 @@ the world console in front:
 ../twow.sh run [loglevel]
 ```
 
+`--detached` puts the world console in a tmux session instead, so the server
+outlives the shell that started it, and `../twow.sh console` returns to it:
+
+```
+../twow.sh run --detached [loglevel]
+../twow.sh console
+```
+
+Leaving that console does two different things:
+
+- tmux prefix, then `d` - detaches, and the server keeps running.
+  The prefix is `Ctrl+B` unless your `tmux.conf` changes it.
+- `Ctrl+C` - stops the server, same as `server shutdown 1` at the prompt.
+
 The three pieces also start on their own, one per terminal, which keeps their
 logs apart:
 
@@ -50,7 +64,9 @@ each refuses to start without the piece below it, and names what is missing.
 `TWOW_SKIP_PREFLIGHT=1` starts anyway, for a database or login server these
 checks do not describe. Every script takes `--help`.
 
-Login: admin / admin (see README.txt; the password is meant to be replaced).
+Login: the game master account setup offered on the first run.
+`../twow.sh account --list` shows who is here, `--password <name>` changes one,
+and a bare `../twow.sh account` makes another.
 
 ## Stopping the world
 
@@ -90,8 +106,10 @@ and the port and process checks they share with `twow.sh`.
 ## Notes
 
 - mangosd expects its console on stdin and therefore requires a real terminal.
-  With stdin closed (background or service) it shuts down right after startup;
-  for a systemd unit, Console.Enable = 0 is set in bin/mangosd.conf instead.
+  With stdin closed (background or service) it shuts down right after startup.
+  `../twow.sh run --detached` gives it one that outlives the shell, and
+  `../twow.sh console` returns to it. A systemd unit is the other way, and needs
+  `Console.Enable = 0` in `bin/mangosd.conf`, which trades the console away.
 - Ports: MySQL per `db.env` (3306 unless taken), 3724 realmd (auth), 8091
   mangosd (world). The bind follows the realm's address, asked at first boot and
   changed with `./twow.sh realm <address>`; Section 14 of the setup guide

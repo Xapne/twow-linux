@@ -181,6 +181,31 @@ dump left behind, whether the realm listens where it advertises, and the
 firewall in front of it. It reads only, names the fix beside each finding, and
 exits non-zero when something is wrong.
 
+The world server holds the `mangos>` console on the terminal that starts it.
+`./twow.sh run --detached` puts that console in a tmux session instead, so the
+server outlives the shell, and `./twow.sh console` returns to it.
+
+Leaving that console does two different things, so it is worth knowing both:
+
+- tmux prefix, then `d` - detaches, and the server keeps running.
+  The prefix is `Ctrl+B` unless your `tmux.conf` changes it.
+- `Ctrl+C` - stops the server, same as `server shutdown 1` at the prompt.
+
+tmux is all `--detached` needs; plain `run` works without it.
+
+More modes:
+
+- `./twow.sh logs [world|realmd|errors|db] [-f]` - last 40 lines of a log, or
+  `-f` to follow it
+- `./twow.sh account --list` - who has an account and at what level;
+  `--password <name>` changes one from a shell
+- `./twow.sh reset --world` - empties the realm; the build, the world database
+  and the client stay
+- `./twow.sh reset --all` - removes what setup generated, keeping `client/` and
+  the archives, so a conversion starts again from what is downloaded
+
+Both `reset` forms ask before doing anything.
+
 First boot: setup offers a name for the realm, who can reach it, and a game
 master account, and points `client/realmlist.wtf` at this realm; a client
 carried over from the live game arrives pointed at Turtle's own login server.
