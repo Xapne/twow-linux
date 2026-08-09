@@ -1180,7 +1180,7 @@ backup_all() {
 
 # Restoring overwrites live characters, so it refuses while the world is up and
 # says plainly what it is about to replace.
-restore_backup() {  # $1 path to a .sql.gz written by backup_all
+restore_backup() {  # $1 path to a .sql.gz written by backup_all, $2 the --yes flag
   local file=$1 db
   [[ -f "$file" ]] || die "no such backup: $file
   Available: ls ${SERVER#"$ROOT"/}/backups/"
@@ -1191,9 +1191,8 @@ restore_backup() {  # $1 path to a .sql.gz written by backup_all
   esac
   world_running && die "the world server is running; stop it first: $0 stop
   Restoring under a live server would be overwritten by the next character save."
-  warn "about to replace everything in $db with the contents of ${file##*/}"
-  ui_select "This cannot be undone. Continue?" 1 "Yes, restore it" "No, stop here"
-  (( ANSWER == 0 )) || { say "nothing restored"; return 0; }
+  confirm_destructive "everything in $db is replaced by the contents of
+  ${file##*/}." "${2:-}" || { say "nothing restored"; return 0; }
   gzip -dc "$file" | DB "$db" || die "restore failed; $db may be half-written.
   Try another backup, or reseed with: $0 setup"
   say "$db restored from ${file##*/}"
@@ -1704,11 +1703,12 @@ ${C_BOLD}Modes:${C_RST}
                  what this system needs, what is already there, and the
                  one command that installs the rest; --packages prints
                  the bare list (twow-vm.sh provisions its guest with it)
-  ${C_GREEN}backup${C_RST} [--restore <file>]
+  ${C_GREEN}backup${C_RST} [--restore <file> [--yes]]
                  dump characters and accounts into server/backups, keeping
                  the newest ${C_DIM}TWOW_BACKUP_KEEP${C_RST} of each (default 10). Safe to run
-                 while the server is up. --restore puts one back, which
-                 refuses while the world is running.
+                 while the server is up. --restore puts one back, which asks
+                 first and refuses while the world is running; --yes answers
+                 for a run with no terminal.
                  ${C_DIM}turtle_world is not backed up here: setup and update
                  rebuild it. Characters and accounts cannot be rebuilt.${C_RST}
   ${C_GREEN}status${C_RST}         what is running: database, realmd, world, and their ports
@@ -1848,9 +1848,9 @@ case "$mode" in
     check_deps; resolve_db_port; start_native_db; ensure_db_credentials; assert_own_database
     case "${2:-}" in
       "")        backup_all ;;
-      --restore) [[ -n "${3:-}" ]] || die "usage: $0 backup --restore <file.sql.gz>"
-                 restore_backup "$3" ;;
-      *)         die "unknown option '$2'; backup takes --restore <file> or nothing" ;;
+      --restore) [[ -n "${3:-}" ]] || die "usage: $0 backup --restore <file.sql.gz> [--yes]"
+                 restore_backup "$3" "${4:-}" ;;
+      *)         die "unknown option '$2'; backup takes --restore <file> [--yes] or nothing" ;;
     esac ;;
   update) check_deps; update_all ;;
   deps)
