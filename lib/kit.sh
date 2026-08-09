@@ -1,6 +1,6 @@
 # =============================================================================
-# The kit's shared machinery: how it speaks, how it reaches the database, and
-# how it answers what is already running
+# The kit's shared machinery: logging, the database handle, and the port,
+# process and config questions every entry point asks
 # =============================================================================
 # Sourced by setup-native.sh and by every script in server/, which had a copy
 # each: db.env was read in three places, the MariaDB daemon looked for in two,
@@ -19,12 +19,12 @@ KIT_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${KIT_RERUN:=$0}"
 
 # -----------------------------------------------------------------------------
-# Saying things
+# Logging
 # -----------------------------------------------------------------------------
-# KIT_TAG names the speaker, so a line reads as coming from the mysql script or
-# the world script rather than from "setup" wherever it was printed. The three
-# spellings themselves are a contract: setup-vm.sh reads "[setup]", "[warn]" and
-# "[error]" out of the guest's log to drive its progress bar and to fail fast.
+# KIT_TAG is the prefix every line carries, so output identifies the script that
+# produced it. The three spellings are a contract: setup-vm.sh reads "[setup]",
+# "[warn]" and "[error]" out of the guest's log to drive its progress bar and to
+# fail fast.
 : "${KIT_TAG:=setup}"
 say()  { printf '\033[1;32m[%s]\033[0m %s\n' "$KIT_TAG" "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
@@ -38,9 +38,8 @@ die()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
 # so a value from the environment still wins, and the TWOW_ prefix keeps a bare
 # DB_HOST/DB_PORT/DB_USER already in the environment out of the way.
 #
-# The port is deliberately left empty when nothing has settled it: setup-native.sh
-# resolves it against what is listening, and a script that cannot resolve says
-# 3306 for itself.
+# The port stays empty until something settles it: setup-native.sh resolves it
+# against what is listening, and a script that cannot resolve falls back to 3306.
 [[ -f "$SERVER/db.env" ]] && . "$SERVER/db.env"
 TWOW_DB_HOST=${TWOW_DB_HOST:-127.0.0.1}
 TWOW_DB_PORT=${TWOW_DB_PORT:-}
@@ -155,9 +154,9 @@ conf_has() {  # $1 file, $2 key
 }
 
 # $1 file, $2 key, $3 value, [$4 = quote]; no-op if unchanged. A missing key is
-# reported and skipped rather than treated as an error, so one absent setting
-# does not abandon a form half filled in. CONF_WARN names the voice, so the
-# interactive screen keeps its gutter style.
+# reported and skipped, so one absent setting does not abandon the whole form.
+# CONF_WARN selects the warning function, which keeps the interactive screen in
+# its gutter style.
 conf_set() {
   local file="$1" key="$2" val="$3" cur esc
   cur="$(conf_get "$file" "$key")"
