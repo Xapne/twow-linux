@@ -73,6 +73,9 @@ bar_done() { printf '\r\033[2K'; say "$1"; }
 # --- ssh plumbing -------------------------------------------------------------
 SSHOPTS=(-p "$SSH_PORT" -i "$WORKDIR/vmkey" -o StrictHostKeyChecking=accept-new
          -o UserKnownHostsFile="$WORKDIR/known_hosts" -o LogLevel=ERROR)
+# Callers expand what the host knows, such as its own LAN address, before the
+# command travels.
+# shellcheck disable=SC2029
 vm()   { ssh  "${SSHOPTS[@]}" turtle@127.0.0.1 "$@"; }
 vmtty(){ ssh -t "${SSHOPTS[@]}" turtle@127.0.0.1 "$@"; }
 vm_up(){ vm -o ConnectTimeout=3 true 2>/dev/null; }
@@ -226,6 +229,8 @@ boot_vm() {
       -drive file=seed.iso,media=cdrom \
       -nic user,model=virtio-net-pci,hostfwd=tcp::"$SSH_PORT"-:22,hostfwd=tcp::"$REALM_PORT"-:3724,hostfwd=tcp::"$WORLD_PORT"-:"$WORLD_PORT" \
       -serial file:logs/serial.log -display none -daemonize -pidfile qemu.pid )
+  # The four spinner frames, the last of them a backslash.
+  # shellcheck disable=SC1003
   local i spin='|/-\'
   for i in $(seq 1 60); do
     vm_up && { printf '\r\033[2K'; say "VM is up, ssh answering on $SSH_PORT"; return; }
@@ -495,8 +500,11 @@ status() {
     return 0
   fi
   note "VM: running (ssh $SSH_PORT, forwards $REALM_PORT/$WORLD_PORT)"
-  vm 'test -x twow/server/bin/mangosd' 2>/dev/null \
-    && note "conversion: done" || note "conversion: not done"
+  if vm 'test -x twow/server/bin/mangosd' 2>/dev/null; then
+    note "conversion: done"
+  else
+    note "conversion: not done"
+  fi
   { vm 'cd twow && ./setup-native.sh status' 2>/dev/null || true; } | relay_kit
   ui_outro "work dir: $WD"
 }

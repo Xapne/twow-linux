@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # =============================================================================
 # The kit's shared machinery: logging, the database handle, and the port,
 # process and config questions every entry point asks
@@ -40,6 +41,7 @@ die()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
 #
 # The port stays empty until something settles it: setup-native.sh resolves it
 # against what is listening, and a script that cannot resolve falls back to 3306.
+# shellcheck source=/dev/null  # written at setup time, absent until then
 [[ -f "$SERVER/db.env" ]] && . "$SERVER/db.env"
 TWOW_DB_HOST=${TWOW_DB_HOST:-127.0.0.1}
 TWOW_DB_PORT=${TWOW_DB_PORT:-}
@@ -201,6 +203,8 @@ conf_db_info() {  # $1 file, $2 key
 # Whether the database named in a config answers there.
 conf_db_reachable() {  # $1 file, $2 key
   local h p u w n
+  # The fifth field takes the database name, which keeps it out of the password.
+  # shellcheck disable=SC2034
   read -r h p u w n <<<"$(conf_db_info "$1" "$2")" || return 1
   [[ -n "$h" && -n "$p" ]] || return 1
   mariadb -h "$h" -P "$p" -u "$u" -p"$w" -e "SELECT 1" >/dev/null 2>&1
@@ -341,9 +345,11 @@ fix_stale_maintenance() {
   [[ "$next" =~ ^[0-9]+$ ]] || return 0
   today=$(( $(date +%s) / 86400 ))
   (( next > 0 && next < today - 7 )) || return 0
-  DB turtle_char -e "UPDATE saved_variables SET lastHonorMaintenanceDay = 0,
-                       nextHonorMaintenanceDay = 0, honorMaintenanceMarker = 0" 2>/dev/null \
-    && say "honor maintenance date was $(( today - next )) days stale; cleared, the core sets its own on this start" \
-    || warn "could not clear a stale honor maintenance date; the server may announce
+  if DB turtle_char -e "UPDATE saved_variables SET lastHonorMaintenanceDay = 0,
+                          nextHonorMaintenanceDay = 0, honorMaintenanceMarker = 0" 2>/dev/null; then
+    say "honor maintenance date was $(( today - next )) days stale; cleared, the core sets its own on this start"
+  else
+    warn "could not clear a stale honor maintenance date; the server may announce
   a restart shortly after starting, and will not come back on its own."
+  fi
 }

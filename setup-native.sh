@@ -393,6 +393,8 @@ ensure_ace() {
   Check https://github.com/DOCGroup/ACE_TAO/releases for the current name."
   tar xf "ACE-$ACE_VER.tar.gz"
   echo '#include "ace/config-linux.h"' > "$ACE_ROOT/ace/config.h"
+  # $(ACE_ROOT) is a make variable and reaches the file literally.
+  # shellcheck disable=SC2016
   echo 'include $(ACE_ROOT)/include/makeinclude/platform_linux.GNU' \
     > "$ACE_ROOT/include/makeinclude/platform_macros.GNU"
   local jobs; jobs=$(build_jobs)
@@ -633,7 +635,7 @@ make_gm_account() {
   ui_text "Password" "mysecret"
   pass=${ANSWER^^}
   if [[ -z "$pass" ]]; then ui_warn "a password is required"; ui_outro "not created"; return 0; fi
-  hash=$(printf '%s:%s' "$acc" "$pass" | sha1sum | cut -d' ' -f1 | tr a-z A-Z)
+  hash=$(printf '%s:%s' "$acc" "$pass" | sha1sum | cut -d' ' -f1 | tr '[:lower:]' '[:upper:]')
   DB turtle_logon -e "
     INSERT INTO account (username, sha_pass_hash, joindate) VALUES ('$acc','$hash',NOW())
       ON DUPLICATE KEY UPDATE sha_pass_hash='$hash';
@@ -1060,7 +1062,7 @@ update_all() {
 
   start_native_db
   mkdir -p "$SERVER/backups"
-  local backup="$SERVER/backups/turtle_world-$(date +%Y%m%d-%H%M%S)-$after.sql.gz"
+  local backup; backup="$SERVER/backups/turtle_world-$(date +%Y%m%d-%H%M%S)-$after.sql.gz"
   say "backing up turtle_world before migrations"
   mariadb-dump -h "$TWOW_DB_HOST" -P "$TWOW_DB_PORT" -u "$TWOW_DB_USER" -p"$TWOW_DB_PASS" \
       --routines --triggers turtle_world | gzip > "$backup" \
@@ -1099,6 +1101,8 @@ backup_all() {
   # Oldest first, keeping the newest BACKUP_KEEP of each database.
   local old
   for f in "${BACKUP_DBS[@]}"; do
+    # ls orders by modification time, which the names on their own cannot.
+    # shellcheck disable=SC2012
     mapfile -t old < <(ls -1t "$dir/$f-"*.sql.gz 2>/dev/null | tail -n +$((BACKUP_KEEP + 1)))
     ((${#old[@]})) && { rm -f "${old[@]}"; say "pruned ${#old[@]} old $f backup(s), keeping $BACKUP_KEEP"; }
   done
@@ -1340,7 +1344,8 @@ case "$mode" in
     # Without it the mode is the deliberate "make me another one".
     case "${2:-}" in
       "")        make_gm_account ;;
-      --if-none) has_own_gm && say "game master account already there" || make_gm_account ;;
+      --if-none) if has_own_gm; then say "game master account already there"
+                 else make_gm_account; fi ;;
       *)         die "unknown option '$2'; account takes --if-none or nothing" ;;
     esac ;;
   realm)

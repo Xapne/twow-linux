@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Firewall help, shared by setup-native.sh and setup-vm.sh. Expects lib/ui.sh to
 # be sourced already, for ui_select, and the including script's say/warn.
 #
@@ -85,8 +86,10 @@ fw_offer_ports() {  # $@ ports
     say "left alone; open them later with:  $cmd"
     return 0
   fi
-  eval "$cmd" \
-    && say "opened tcp ${closed[*]}" \
-    || warn "that did not succeed; run it by hand:  $cmd"
+  if eval "$cmd"; then
+    say "opened tcp ${closed[*]}"
+  else
+    warn "that did not succeed; run it by hand:  $cmd"
+  fi
   return 0
 }

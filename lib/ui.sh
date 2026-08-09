@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # =============================================================================
 # Shared terminal UI: palette, gutter language and the clack-style prompts
 # =============================================================================
@@ -13,6 +14,8 @@
 # Every prompt writes its result to ANSWER; a caller reads it right after.
 
 C_RST=$'\033[0m' C_BOLD=$'\033[1m' C_DIM=$'\033[2m'
+# C_RED is read by setup-vm.sh, which sources this file.
+# shellcheck disable=SC2034
 C_GREEN=$'\033[1;32m' C_YELLOW=$'\033[1;33m' C_RED=$'\033[1;31m'
 C_CYAN=$'\033[1;36m' C_GRAY=$'\033[90m'
 GUT="${C_GRAY}│${C_RST}"

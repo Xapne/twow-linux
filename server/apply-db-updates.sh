@@ -77,7 +77,9 @@ last="${last%_world}"
 echo "DB is at migration: $last"
 
 applied=0
-for f in $(ls *_world.sql | sort); do
+# The 14-digit stamp makes the glob's lexical order chronological.
+for f in *_world.sql; do
+  [ -e "$f" ] || continue
   stamp="${f%%_*}"
   [ "$stamp" \> "$last" ] || continue
   name="${f%.sql}"
