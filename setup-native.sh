@@ -727,27 +727,53 @@ ensure_database() {
 }
 
 # -----------------------------------------------------------------------------
-# characters the repack's dump carries from the server it was sliced out of
+# accounts and characters the repack's dump carries from the server it was
+# sliced out of
 # -----------------------------------------------------------------------------
+# turtle_logon arrives with ADMIN and TEST at SEC_ADMINISTRATOR, each holding
+# its own name as its password, so a realm reachable on the LAN hands full
+# administrator rights to anyone who finds port 3724. Both go, and the account
+# counter starts again at 1.
+#
 # turtle_char arrives with six level 60s whose accounts stayed behind and two
 # pets whose owners were deleted before the export. Guids are handed out from
 # MAX(guid)+1, which lands on one of those owners, so the first character
 # created adopts a stray pet whatever its class.
 #
-# Only what the dump brought with it is in scope: a character with an account
-# stays, and so does a pet whose owner exists. The list covers every table in
-# this schema keyed on a character guid, plus the pet tables.
+# Scope is what the dump brought with it. An account whose password has been
+# changed is somebody's own and stays, as does a character with an account and
+# a pet whose owner exists. Removing the two accounts leaves their characters
+# ownerless, which is what the sweep below is for, so the order matters.
 clean_seed_leftovers() {
   local before after
   before=$(DB -N -B -e "SELECT
-      (SELECT COUNT(*) FROM turtle_char.characters c
+      (SELECT COUNT(*) FROM turtle_logon.account
+         WHERE username IN ('ADMIN','TEST')
+           AND sha_pass_hash = UPPER(SHA1(CONCAT(username, ':', username))))
+    + (SELECT COUNT(*) FROM turtle_char.characters c
          LEFT JOIN turtle_logon.account a ON a.id = c.account WHERE a.id IS NULL)
     + (SELECT COUNT(*) FROM turtle_char.character_pet p
          LEFT JOIN turtle_char.characters c ON c.guid = p.owner WHERE c.guid IS NULL)" 2>/dev/null) || return 0
   [[ "$before" =~ ^[0-9]+$ ]] || return 0
   (( before > 0 )) || return 0
 
-  DB turtle_char <<'SQL' >/dev/null 2>&1 || { warn "could not clear the dump's leftover characters; they are harmless apart from a stray pet"; return 0; }
+  DB turtle_char <<'SQL' >/dev/null 2>&1 || { warn "could not clear what the repack's dump left behind; ADMIN and TEST may still be able to log in"; return 0; }
+CREATE TEMPORARY TABLE twow_stock (id INT UNSIGNED PRIMARY KEY);
+INSERT INTO twow_stock
+  SELECT id FROM turtle_logon.account
+   WHERE username IN ('ADMIN','TEST')
+     AND sha_pass_hash = UPPER(SHA1(CONCAT(username, ':', username)));
+
+DELETE t FROM turtle_logon.account_ip_logins  t JOIN twow_stock s ON s.id = t.account_id;
+DELETE t FROM turtle_logon.account_banned     t JOIN twow_stock s ON s.id = t.id;
+DELETE t FROM turtle_logon.account_muted      t JOIN twow_stock s ON s.id = t.id;
+DELETE t FROM turtle_logon.shop_coins         t JOIN twow_stock s ON s.id = t.id;
+DELETE t FROM turtle_logon.rbac_account_permissions t JOIN twow_stock s ON s.id = t.account_id;
+DELETE t FROM account_data                    t JOIN twow_stock s ON s.id = t.account;
+DELETE t FROM character_tutorial              t JOIN twow_stock s ON s.id = t.account;
+DELETE t FROM whisper_targets                 t JOIN twow_stock s ON s.id = t.account;
+DELETE t FROM turtle_logon.account            t JOIN twow_stock s ON s.id = t.id;
+
 CREATE TEMPORARY TABLE twow_gone (guid INT UNSIGNED PRIMARY KEY);
 INSERT INTO twow_gone
   SELECT c.guid FROM characters c
@@ -793,14 +819,19 @@ DELETE p FROM character_pet p LEFT JOIN characters c ON c.guid = p.owner WHERE c
 DELETE t FROM pet_aura          t LEFT JOIN character_pet p ON p.id = t.guid WHERE p.id IS NULL;
 DELETE t FROM pet_spell         t LEFT JOIN character_pet p ON p.id = t.guid WHERE p.id IS NULL;
 DELETE t FROM pet_spell_cooldown t LEFT JOIN character_pet p ON p.id = t.guid WHERE p.id IS NULL;
+
+ALTER TABLE turtle_logon.account AUTO_INCREMENT = 1;
 SQL
 
   after=$(DB -N -B -e "SELECT
-      (SELECT COUNT(*) FROM turtle_char.characters c
+      (SELECT COUNT(*) FROM turtle_logon.account
+         WHERE username IN ('ADMIN','TEST')
+           AND sha_pass_hash = UPPER(SHA1(CONCAT(username, ':', username))))
+    + (SELECT COUNT(*) FROM turtle_char.characters c
          LEFT JOIN turtle_logon.account a ON a.id = c.account WHERE a.id IS NULL)
     + (SELECT COUNT(*) FROM turtle_char.character_pet p
          LEFT JOIN turtle_char.characters c ON c.guid = p.owner WHERE c.guid IS NULL)" 2>/dev/null) || after=0
-  say "cleared $(( before - after )) leftover row(s) the repack's character dump arrived with"
+  say "cleared $(( before - after )) row(s) the repack's dump arrived with; the realm starts empty"
 }
 
 # -----------------------------------------------------------------------------

@@ -124,18 +124,23 @@ you have one, so clients on this host and on the local network both work
 SSH into the VM on port 2222 (turtle / turtle). The zips can sit in
 `~/twow-vm`, the current directory, or `~/Downloads` - it finds them.
 
-## What the repack's character database carries
+## What the repack's dump carries
 
-`turtle_char` in the repack is a slice of a live server. Six level 60s come with
-account ids that stayed behind, and two hunter pets come with owners that were
-deleted before the export.
+`turtle_logon` ships ADMIN and TEST at administrator level, each holding its own
+name as its password. A realm reachable on the LAN hands full administrator
+rights to anyone who finds port 3724, so setup removes both and starts the
+account counter again at 1.
 
-Character guids are handed out from `MAX(guid)+1`, which lands on one of those
-owners, so the first character created adopts a stray pet: a Mistvale Gorilla
-follows a mage or a warrior around from the moment it logs in.
+`turtle_char` is a slice of a live server. Six level 60s come with account ids
+that stayed behind, and two hunter pets come with owners that were deleted
+before the export. Character guids are handed out from `MAX(guid)+1`, which
+lands on one of those owners, so the first character created adopts a stray pet:
+a Mistvale Gorilla follows a mage or a warrior around from the moment it logs
+in.
 
-Setup clears both, and keeps every character that has an account along with
-every pet whose owner exists.
+Setup clears all of it, so the realm starts empty and the first account and
+character are yours. An account whose password has been changed is somebody's
+own and stays, as does any character that has an account.
 
 ## Configure your server
 
