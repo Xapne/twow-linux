@@ -14,10 +14,6 @@ KIT_RERUN="$0"
   || { printf 'lib/kit.sh is missing beside this folder; restore it from the repo\n' >&2; exit 1; }
 # shellcheck source=../lib/kit.sh
 . "$ROOT/lib/kit.sh"
-[[ -d "$ROOT/src/sql/database_updates" ]] \
-  || die "no source checkout in src/, which is where the migrations live:
-  $ROOT/setup-native.sh setup"
-cd "$ROOT/src/sql/database_updates"
 
 # Gives a colliding INSERT the migration's newer values by appending
 # ON DUPLICATE KEY UPDATE over exactly the columns the statement names, so
@@ -72,16 +68,47 @@ to_upsert() {
   '
 }
 
+# Migration files the database has yet to record, in order. The 14-digit stamp
+# makes the glob's lexical order chronological.
+# $1 the last stamp recorded
+pending_files() {
+  local last=$1 f
+  for f in *_world.sql; do
+    [ -e "$f" ] || continue
+    [ "${f%%_*}" \> "$last" ] || continue
+    printf '%s\n' "$f"
+  done
+}
+
+# run only when executed, not when sourced (keeps the functions testable)
+[[ "${BASH_SOURCE[0]}" == "$0" ]] || return 0
+
+CHECK=0
+case "${1:-}" in
+  "")        ;;
+  --check)   CHECK=1 ;;
+  -h|--help) printf 'Usage: %s [--check]\n  --check counts what is pending and applies none\n' "$0"; exit 0 ;;
+  *)         die "unknown option '$1'; --check counts what is pending and applies none" ;;
+esac
+
+[[ -d "$ROOT/src/sql/database_updates" ]] \
+  || die "no source checkout in src/, which is where the migrations live:
+  $ROOT/setup-native.sh setup"
+cd "$ROOT/src/sql/database_updates"
+
 last=$(DB -N -e "SELECT Name FROM turtle_world.migrations WHERE Name REGEXP '^[0-9]{14}_world$' ORDER BY Name DESC LIMIT 1")
 last="${last%_world}"
+
+# --check is what the doctor mode asks, so the rule for what is pending lives
+# here beside the applier.
+if [ "$CHECK" = 1 ]; then
+  pending_files "$last" | wc -l
+  exit 0
+fi
 echo "DB is at migration: $last"
 
 applied=0
-# The 14-digit stamp makes the glob's lexical order chronological.
-for f in *_world.sql; do
-  [ -e "$f" ] || continue
-  stamp="${f%%_*}"
-  [ "$stamp" \> "$last" ] || continue
+while IFS= read -r f; do
   name="${f%.sql}"
   err=$(mktemp)
   if DB turtle_world < "$f" 2>"$err"; then
@@ -103,5 +130,5 @@ for f in *_world.sql; do
   DB -e "INSERT INTO turtle_world.migrations (Name, Hash, AppliedAt) VALUES ('$name', '$hash', NOW());"
   echo "$status  $name"
   applied=$((applied+1))
-done
+done < <(pending_files "$last")
 echo "Done. $applied migration(s) applied."
