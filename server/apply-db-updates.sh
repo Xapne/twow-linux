@@ -93,7 +93,7 @@ esac
 
 [[ -d "$ROOT/src/sql/database_updates" ]] \
   || die "no source checkout in src/, which is where the migrations live:
-  $ROOT/setup-native.sh setup"
+  $ROOT/twow.sh setup"
 cd "$ROOT/src/sql/database_updates"
 
 last=$(DB -N -e "SELECT Name FROM turtle_world.migrations WHERE Name REGEXP '^[0-9]{14}_world$' ORDER BY Name DESC LIMIT 1")

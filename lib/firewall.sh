@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Firewall help, shared by setup-native.sh and setup-vm.sh. Expects lib/ui.sh to
+# Firewall help, shared by twow.sh and twow-vm.sh. Expects lib/ui.sh to
 # be sourced already, for ui_select, and the including script's say/warn.
 #
 # Only ufw and firewalld are handled. Both can be asked what they are doing and

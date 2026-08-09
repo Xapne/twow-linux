@@ -4,7 +4,7 @@ Everything server-side runs natively. No Wine in the server stack.
 
 - `bin/realmd`, `bin/mangosd`: native Linux builds of Penqle's tortoise-wow,
   branch 1181dev, compiled from `../src` into `../build`. ACE is taken from the
-  distribution where a recent enough version is packaged (`../setup-native.sh
+  distribution where a recent enough version is packaged (`../twow.sh
   deps` says whether it is here), and otherwise built into
   `../deps/ACE_wrappers`.
 - Database: system MariaDB binary with a project-local data directory in
@@ -30,7 +30,7 @@ One command does all three, the database and login server in the background and
 the world console in front:
 
 ```
-../setup-native.sh run [loglevel]
+../twow.sh run [loglevel]
 ```
 
 The three pieces also start on their own, one per terminal, which keeps their
@@ -42,7 +42,7 @@ logs apart:
    terminal is the server console (account create <user> <pass>).
    Optional loglevel 0-3 sets console verbosity in mangosd.conf before
    launch (0 near-silent, 1 errors only, 2 detail, 3 debug). Same argument
-   works on `setup-native.sh run [loglevel]`. Log files keep their own
+   works on `twow.sh run [loglevel]`. Log files keep their own
    detail via LogFileLevel.
 
 Either way the same scripts run, and the order is checked rather than assumed:
@@ -71,18 +71,18 @@ before the world is stopped for maintenance, and removed afterwards.
   and rebuild. `--check` counts what is waiting and applies none.
 - `./clear-logs.sh`: empties the logs/ folder.
 
-`../setup-native.sh doctor` examines an install rather than running one:
+`../twow.sh doctor` examines an install rather than running one:
 binaries and map data, the game databases and their pending migrations, what
 the repack's dump left behind, whether the realm listens where it advertises,
 and the firewall in front of it. It reads only, so it is safe against a running
 server, and exits non-zero when something is wrong.
 
 All of them read `../lib/kit.sh`, which holds the logging, the database handle
-and the port and process checks they share with `setup-native.sh`.
+and the port and process checks they share with `twow.sh`.
 
 ## Updating
 
-1. Stop the world server (see above); `setup-native.sh update` refuses while it is running
+1. Stop the world server (see above); `twow.sh update` refuses while it is running
 2. `cd ../src && git pull`
 3. `ninja -C ../build mangosd realmd` and copy the two binaries into `bin/`
 4. `./apply-db-updates.sh` (with MySQL running)
@@ -94,6 +94,6 @@ and the port and process checks they share with `setup-native.sh`.
   for a systemd unit, Console.Enable = 0 is set in bin/mangosd.conf instead.
 - Ports: MySQL per `db.env` (3306 unless taken), 3724 realmd (auth), 8091
   mangosd (world). The bind follows the realm's address, asked at first boot and
-  changed with `./setup-native.sh realm <address>`; Section 14 of the setup guide
+  changed with `./twow.sh realm <address>`; Section 14 of the setup guide
   covers the same by hand (BindIP, HostAddressOverride in bin/realmd.conf, and
   the realmlist table address).

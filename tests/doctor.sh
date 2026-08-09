@@ -4,8 +4,8 @@
 # fails here rather than in somebody's install.
 # shellcheck source=tests/_assert.sh
 . "$(dirname "${BASH_SOURCE[0]}")/_assert.sh"
-# shellcheck source=setup-native.sh
-. "$KIT/setup-native.sh"
+# shellcheck source=twow.sh
+. "$KIT/twow.sh"
 
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/server/bin"

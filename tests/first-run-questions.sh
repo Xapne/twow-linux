@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Which states make first_run_questions ask how far the realm reaches. The
 # loopback the repack ships is the one that asks; a wider bind under the same
-# address is setup-vm.sh's port forward and is left alone.
+# address is twow-vm.sh's port forward and is left alone.
 # shellcheck source=tests/_assert.sh
 . "$(dirname "${BASH_SOURCE[0]}")/_assert.sh"
-# shellcheck source=setup-native.sh
-. "$KIT/setup-native.sh"
+# shellcheck source=twow.sh
+. "$KIT/twow.sh"
 
 ASKED="" ADDR="" BIND=""
 offer_realm_name()    { :; }

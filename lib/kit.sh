@@ -3,7 +3,7 @@
 # The kit's shared machinery: logging, the database handle, and the port,
 # process and config questions every entry point asks
 # =============================================================================
-# Sourced by setup-native.sh and by every script in server/, which had a copy
+# Sourced by twow.sh and by every script in server/, which had a copy
 # each: db.env was read in three places, the MariaDB daemon looked for in two,
 # and config keys rewritten in two dialects, of which only one could tell a
 # missing key from a rewritten one.
@@ -23,7 +23,7 @@ KIT_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Logging
 # -----------------------------------------------------------------------------
 # KIT_TAG is the prefix every line carries, so output identifies the script that
-# produced it. The three spellings are a contract: setup-vm.sh reads "[setup]",
+# produced it. The three spellings are a contract: twow-vm.sh reads "[setup]",
 # "[warn]" and "[error]" out of the guest's log to drive its progress bar and to
 # fail fast.
 : "${KIT_TAG:=setup}"
@@ -34,12 +34,12 @@ die()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
 # -----------------------------------------------------------------------------
 # The database handle
 # -----------------------------------------------------------------------------
-# db.env carries the port setup-native.sh settled on, which is not 3306 when a
+# db.env carries the port twow.sh settled on, which is not 3306 when a
 # system MariaDB already holds that one. It is written in ${VAR:-default} form
 # so a value from the environment still wins, and the TWOW_ prefix keeps a bare
 # DB_HOST/DB_PORT/DB_USER already in the environment out of the way.
 #
-# The port stays empty until something settles it: setup-native.sh resolves it
+# The port stays empty until something settles it: twow.sh resolves it
 # against what is listening, and a script that cannot resolve falls back to 3306.
 # shellcheck source=/dev/null  # written at setup time, absent until then
 [[ -f "$SERVER/db.env" ]] && . "$SERVER/db.env"
@@ -225,7 +225,7 @@ preflight_skipped() {
 need_binary() {  # $1 name in server/bin
   [[ -x "$SERVER/bin/$1" ]] && return 0
   die "server/bin/$1 is missing or not executable.
-  The native binaries are built by: $ROOT/setup-native.sh setup"
+  The native binaries are built by: $ROOT/twow.sh setup"
 }
 
 need_database() {  # $1 config file, $2 key, $3 who is asking
@@ -277,7 +277,7 @@ resolve_db_port() {
 
 write_db_env() {
   cat > "$SERVER/db.env" <<EOF
-# Written by setup-native.sh and read by the helper scripts in this folder so
+# Written by twow.sh and read by the helper scripts in this folder so
 # they reach the same database. Safe to edit; the environment still wins.
 TWOW_DB_HOST=\${TWOW_DB_HOST:-$TWOW_DB_HOST}
 TWOW_DB_PORT=\${TWOW_DB_PORT:-$TWOW_DB_PORT}

@@ -2,19 +2,19 @@
 # =============================================================================
 # Shared terminal UI: palette, gutter language and the clack-style prompts
 # =============================================================================
-# Sourced by setup-native.sh and setup-vm.sh, which both draw the same screens.
+# Sourced by twow.sh and twow-vm.sh, which both draw the same screens.
 # Kept here because the two had a copy each and the copies had already drifted
 # apart: only one of them survived a piped stdin, and only one restored the
 # cursor after Ctrl+C.
 #
 # The log helpers (say/warn/die) deliberately stay in the two scripts: the
-# "[setup]" prefixes setup-native.sh prints are parsed by setup-vm.sh to drive
+# "[setup]" prefixes twow.sh prints are parsed by twow-vm.sh to drive
 # its progress bar, so the two are different on purpose.
 #
 # Every prompt writes its result to ANSWER; a caller reads it right after.
 
 C_RST=$'\033[0m' C_BOLD=$'\033[1m' C_DIM=$'\033[2m'
-# C_RED is read by setup-vm.sh, which sources this file.
+# C_RED is read by twow-vm.sh, which sources this file.
 # shellcheck disable=SC2034
 C_GREEN=$'\033[1;32m' C_YELLOW=$'\033[1;33m' C_RED=$'\033[1;31m'
 C_CYAN=$'\033[1;36m' C_GRAY=$'\033[90m'

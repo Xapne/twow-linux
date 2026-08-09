@@ -3,8 +3,8 @@
 # control flow is under test. No database and no terminal are needed.
 # shellcheck source=tests/_assert.sh
 . "$(dirname "${BASH_SOURCE[0]}")/_assert.sh"
-# shellcheck source=setup-native.sh
-. "$KIT/setup-native.sh"
+# shellcheck source=twow.sh
+. "$KIT/twow.sh"
 
 WROTE="" FW="" SELECT=0 TEXT=""
 set_realm_address() { WROTE="$1"; return 0; }

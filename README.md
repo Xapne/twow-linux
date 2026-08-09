@@ -33,7 +33,7 @@ the preservation Discord; links in the guide can expire):
 ```
 git clone <this repo> twow && cd twow
 # put TurtleWoW_1.18.zip and data.zip here
-./setup-native.sh          # convert everything, then start the server
+./twow.sh          # convert everything, then start the server
 ```
 
 The script is idempotent: it skips finished steps, so re-run it freely.
@@ -41,7 +41,7 @@ The script is idempotent: it skips finished steps, so re-run it freely.
 ## Dependencies
 
 ```
-./setup-native.sh deps
+./twow.sh deps
 ```
 
 Shows what this system needs, what it already has, and the one command that
@@ -49,25 +49,28 @@ installs the rest, in your distro's package names. Every mode runs the same
 check before it starts, and says everything at once - including what only the
 database seed will want later, an hour into the job.
 
-The table it reads lives in `setup-native.sh`, and that is where package names
-belong. `setup-vm.sh` asks for the list with `deps --packages` when it
+The table it reads lives in `twow.sh`, and that is where package names
+belong. `twow-vm.sh` asks for the list with `deps --packages` when it
 provisions its guest, so both paths install from the same place: add a
 dependency once and every install path picks it up.
 
 ## Repo layout
 
-- `setup-native.sh` - the converter and the server CLI; owns the dependency table
-- `setup-vm.sh` - the VM deployer, a wrapper around the above
+- `twow.sh` - the converter and the server CLI; owns the dependency table
+- `twow-vm.sh` - the VM deployer, a wrapper around the above
 - `lib/ui.sh` - the terminal prompts and palette both scripts draw with
 - `lib/kit.sh` - logging, the database handle and the port, process and config
   checks every script here shares
 - `server/` - the converted repack and its day-to-day scripts
 - `check.sh` - shell syntax, shellcheck and the tests in `tests/`, run in one
   go; `.github/workflows/check.yml` runs the same script on push
+- `tests/` - assertions over the kit's own functions, no database or terminal
+- `setup-native.sh`, `setup-vm.sh` - the former names, standing in until the
+  installs carrying them have moved on
 
 ## Don't want to touch your OS? Build a machine instead
 
-`setup-vm.sh` runs the whole thing inside a fresh headless Debian VM and
+`twow-vm.sh` runs the whole thing inside a fresh headless Debian VM and
 works from any Linux distro. It checks your host tools (and asks before
 installing anything), downloads Debian's official cloud image, boots it
 with the game ports forwarded, installs every guest dependency, pushes
@@ -75,7 +78,7 @@ your two zips in, runs the conversion with a live progress bar, offers to
 create your GM account, and hands your terminal over as the world console.
 
 ```
-./setup-vm.sh          # zero to world console; asks only what it must
+./twow-vm.sh          # zero to world console; asks only what it must
 ```
 
 ### Requirements
@@ -90,10 +93,10 @@ script checks all of it up front, and warns but keeps going if RAM is tight.
 Environment variables, no editing:
 
 ```
-TWOW_VM_CPUS=4 TWOW_VM_MEM=8G ./setup-vm.sh
-TWOW_VM_DISK=60G ./setup-vm.sh                   # only on first run
-TWOW_VM_DIR=/mnt/games/twow-vm ./setup-vm.sh     # another drive
-TWOW_SSH_PORT=2299 ./setup-vm.sh
+TWOW_VM_CPUS=4 TWOW_VM_MEM=8G ./twow-vm.sh
+TWOW_VM_DISK=60G ./twow-vm.sh                   # only on first run
+TWOW_VM_DIR=/mnt/games/twow-vm ./twow-vm.sh     # another drive
+TWOW_SSH_PORT=2299 ./twow-vm.sh
 ```
 
 By default the VM gets half your RAM (4-12 GB) and up to 8 cores. Cores
@@ -103,8 +106,8 @@ matter for the compile, nothing else. Disk size is fixed at creation:
 ### Managing the VMs it builds
 
 ```
-./setup-vm.sh vms          # every VM built here, running or not
-./setup-vm.sh destroy      # pick one and remove it
+./twow-vm.sh vms          # every VM built here, running or not
+./twow-vm.sh destroy      # pick one and remove it
 ```
 
 Each work dir gets one VM, named after that directory and marked with a
@@ -146,13 +149,13 @@ Setup clears all of it, so the realm starts empty and the first account and
 character are yours. An account whose password has been changed is somebody's
 own and stays, as does any character that has an account.
 
-`./setup-native.sh doctor` checks for each of these, so a later repack that
+`./twow.sh doctor` checks for each of these, so a later repack that
 carries something similar is caught before anyone plays on it.
 
 ## Configure your server
 
 ```
-./setup-native.sh interactive
+./twow.sh interactive
 ```
 
 A guided, arrow-key setup screen for the settings most people want to change:
@@ -164,14 +167,14 @@ around.
 
 ## Other modes
 
-`./setup-native.sh setup` converts without starting; `./setup-native.sh run
-[loglevel]` starts without converting; `./setup-native.sh update` follows
+`./twow.sh setup` converts without starting; `./twow.sh run
+[loglevel]` starts without converting; `./twow.sh update` follows
 upstream: it pulls the latest source, rebuilds only what changed, backs up
 the world database, and applies any new schema migrations (stop the world
-server first). `./setup-native.sh help` shows all modes. Day-to-day
+server first). `./twow.sh help` shows all modes. Day-to-day
 operation is documented in `server/README.linux.md`.
 
-`./setup-native.sh status` reports what is running. `./setup-native.sh doctor`
+`./twow.sh status` reports what is running. `./twow.sh doctor`
 answers the other question, whether the install is correct: binaries and map
 data, the game databases and any migrations still waiting, what the repack's
 dump left behind, whether the realm listens where it advertises, and the
@@ -181,10 +184,10 @@ exits non-zero when something is wrong.
 First boot: setup offers a name for the realm, who can reach it, and a game
 master account, and points `client/realmlist.wtf` at this realm; a client
 carried over from the live game arrives pointed at Turtle's own login server.
-`./setup-native.sh account` creates further accounts, and the world console
+`./twow.sh account` creates further accounts, and the world console
 takes `account create <name> <pass>` just as well. The name can be changed later
-with `./setup-native.sh realm --name <name>`, the address with
-`./setup-native.sh realm <address>`, or both from the interactive screen. The
+with `./twow.sh realm --name <name>`, the address with
+`./twow.sh realm <address>`, or both from the interactive screen. The
 realm shows OFFLINE in the realm list on local servers; that is cosmetic.
 
 ## Credits

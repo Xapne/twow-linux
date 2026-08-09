@@ -35,7 +35,7 @@ esac
 # errors that name neither the cause nor the way out.
 [[ -d "$SERVER/db/mysql" ]] \
   || die "there is no database in server/db yet; the setup creates and seeds it:
-  $ROOT/setup-native.sh setup"
+  $ROOT/twow.sh setup"
 
 # A second daemon on the same data directory is refused by the first one's lock
 # file, several screens later. Say so here instead.
@@ -56,7 +56,7 @@ port_free "$TWOW_DB_PORT" || die "port $TWOW_DB_PORT is in use by something that
 
 mariadbd=$(find_mariadbd) \
   || die "no mariadbd/mysqld found; install your distro's MariaDB server package
-  ($ROOT/setup-native.sh deps names it for this system)"
+  ($ROOT/twow.sh deps names it for this system)"
 
 say "starting MariaDB on $TWOW_DB_HOST:$TWOW_DB_PORT, data in server/db"
 exec "$mariadbd" --defaults-file="$SERVER/my.cnf"

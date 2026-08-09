@@ -51,7 +51,7 @@ esac
 if world_running; then
   die "the world server is already running.
   Its console is the terminal it was started in. To stop it:
-  $ROOT/setup-native.sh stop"
+  $ROOT/twow.sh stop"
 fi
 
 PORT=$(world_port)
