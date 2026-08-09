@@ -54,6 +54,7 @@ REPO=https://github.com/Penqle/tortoise-wow.git
 #   4 tier    required  missing stops the run
 #             optional  missing only costs build time
 #             seed      needed once, for the initial database seed
+#             console   missing leaves the world console in its own terminal
 #   5-8 package on debian | fedora | suse | arch; "-" where unpackaged, which
 #       skips the row on that distro
 DEPS=(
@@ -72,6 +73,7 @@ DEPS=(
   "ZLIB headers|header|zlib.h|required|zlib1g-dev|zlib-devel|zlib-devel|zlib"
   "ACE library|ace||optional|libace-dev|-|-|-"
   "wine|cmd|wine|seed|wine|wine|wine|wine"
+  "tmux|cmd|tmux|console|tmux|tmux|tmux|tmux"
 )
 
 # What this distro calls things. Falls back to Arch names with a note when the
@@ -172,6 +174,9 @@ check_deps() {
   a few minutes on the first run. Skip that with: $INSTALL $d_pkg") ;;
       seed)     seeded || later+=("the one-time database seed further down needs wine,
   which is missing. Install it before then: $INSTALL $d_pkg") ;;
+      console)  later+=("tmux carries the detached world console: 'run --detached' keeps the
+  server up past the shell that started it, and 'console' returns to it.
+  Install it with: $INSTALL $d_pkg") ;;
     esac
   done
 
@@ -618,9 +623,46 @@ has_own_gm() {
   [[ "$n" =~ ^[0-9]+$ ]] && ((n > 0))
 }
 
-# Vanilla sends SHA1 of USER:PASS upper-cased, so that is what the column
-# holds. The name is restricted to what the client can type anyway, which also
-# keeps it out of the statement below as anything but a plain word.
+# Vanilla sends SHA1 of USER:PASS upper-cased, so that is what the column holds.
+account_hash() {  # $1 name, $2 password
+  printf '%s:%s' "$1" "$2" | sha1sum | cut -d' ' -f1 | tr '[:lower:]' '[:upper:]'
+}
+
+# Whether an account of this name is here. The name is restricted to what the
+# client can type, which keeps it out of the statement as anything but a word.
+account_exists() {  # $1 name
+  local n
+  n=$(DB -N -B -e "SELECT COUNT(*) FROM turtle_logon.account WHERE username = '$1'" 2>/dev/null) || return 1
+  [[ "$n" =~ ^[0-9]+$ ]] && (( n > 0 ))
+}
+
+# Who is on this server, at what level, and when they were last seen. rank 3 and
+# above is a game master.
+list_accounts() {
+  DB -e "SELECT id, username, \`rank\`, DATE(joindate) AS joined,
+                DATE(last_login) AS last_seen, last_ip
+           FROM turtle_logon.account ORDER BY id" \
+    || die "the account list could not be read; is the database up? ($0 status)"
+}
+
+# The world console does this with 'account set password', which is reachable
+# only from the console itself; this reaches it from a shell.
+set_account_password() {  # $1 name
+  local acc=${1^^} hash
+  [[ "$acc" =~ ^[A-Z0-9_]{3,16}$ ]] || die "an account name is 3-16 letters, digits or underscores"
+  account_exists "$acc" || die "no account called $acc ($0 account --list shows them)"
+  ui_intro "new password for $acc"
+  ui_text "Password" "mysecret"
+  local pass=${ANSWER^^}
+  [[ -n "$pass" ]] || { ui_warn "a password is required"; ui_outro "unchanged"; return 1; }
+  hash=$(account_hash "$acc" "$pass")
+  DB -e "UPDATE turtle_logon.account SET sha_pass_hash = '$hash' WHERE username = '$acc'" \
+    || { ui_warn "the database refused the change"; ui_outro "unchanged"; return 1; }
+  ui_outro "${acc,,} now logs in with the password you gave"
+}
+
+# The name is restricted to what the client can type anyway, which also keeps it
+# out of the statement below as anything but a plain word.
 make_gm_account() {
   local acc pass hash
   ui_intro "game master account"
@@ -638,7 +680,7 @@ make_gm_account() {
   ui_text "Password" "mysecret"
   pass=${ANSWER^^}
   if [[ -z "$pass" ]]; then ui_warn "a password is required"; ui_outro "not created"; return 0; fi
-  hash=$(printf '%s:%s' "$acc" "$pass" | sha1sum | cut -d' ' -f1 | tr '[:lower:]' '[:upper:]')
+  hash=$(account_hash "$acc" "$pass")
   DB turtle_logon -e "
     INSERT INTO account (username, sha_pass_hash, joindate) VALUES ('$acc','$hash',NOW())
       ON DUPLICATE KEY UPDATE sha_pass_hash='$hash';
@@ -826,18 +868,18 @@ seed_leftovers() {
   printf '%s\n' "$(( a + b + c ))"
 }
 
-clean_seed_leftovers() {
-  local before after stock
-  stock=$(count_stock_accounts) || stock=0
-  before=$(seed_leftovers) || return 0
-  [[ "$before" =~ ^[0-9]+$ ]] || return 0
-  (( before > 0 )) || return 0
-
-  DB turtle_char <<SQL >/dev/null 2>&1 || { warn "could not clear what the repack's dump left behind; ADMIN and TEST may still be able to log in"; return 0; }
+# Removes the accounts a predicate selects, everything filed under them, and
+# every character and pet left without an owner. The predicate is the only
+# difference between clearing the pair the repack ships and emptying the realm,
+# so the tables below are listed once.
+# $1 an SQL predicate over turtle_logon.account
+sweep_accounts() {
+  local pred=$1
+  DB turtle_char <<SQL >/dev/null 2>&1
 CREATE TEMPORARY TABLE twow_stock (id INT UNSIGNED PRIMARY KEY);
 INSERT INTO twow_stock
   SELECT id FROM turtle_logon.account
-   WHERE $SEED_STOCK;
+   WHERE $pred;
 
 DELETE t FROM turtle_logon.account_ip_logins  t JOIN twow_stock s ON s.id = t.account_id;
 DELETE t FROM turtle_logon.account_banned     t JOIN twow_stock s ON s.id = t.id;
@@ -897,6 +939,17 @@ DELETE t FROM pet_spell_cooldown t LEFT JOIN character_pet p ON p.id = t.guid WH
 
 ALTER TABLE turtle_logon.account AUTO_INCREMENT = 1;
 SQL
+}
+
+clean_seed_leftovers() {
+  local before after stock
+  stock=$(count_stock_accounts) || stock=0
+  before=$(seed_leftovers) || return 0
+  [[ "$before" =~ ^[0-9]+$ ]] || return 0
+  (( before > 0 )) || return 0
+
+  sweep_accounts "$SEED_STOCK" \
+    || { warn "could not clear what the repack's dump left behind; ADMIN and TEST may still be able to log in"; return 0; }
 
   after=$(seed_leftovers) || after=0
   say "cleared $(( before - after )) row(s) the repack's dump arrived with; the realm starts empty"
@@ -1417,9 +1470,145 @@ stop_all() {
 # Each piece is started by the same numbered script the manual path uses, so
 # there is one way to start a database and one way to start a login server. Only
 # the ordering, the waiting and the handover are this function's own.
+# mangosd reads its console from stdin and stops when that closes, so the world
+# server needs a terminal for as long as it runs. tmux supplies one that outlives
+# the shell which started it; a service would have to turn the console off
+# instead.
+# A step that cannot be undone is agreed to first. With no terminal there is
+# nobody to ask, so --yes stands in for the answer.
+# $1 what is about to happen, $2 the flag as it was given
+confirm_destructive() {
+  [[ "${2:-}" == --yes ]] && return 0
+  [[ -t 0 ]] || die "$1
+  There is no terminal here to ask on; pass --yes to mean it."
+  ui_intro "this cannot be undone"
+  ui_note "$1"
+  ui_select "Go ahead?" 1 "Yes, do it" "No, leave everything alone"
+  (( ANSWER == 0 )) || { ui_outro "nothing changed"; return 1; }
+  return 0
+}
+
+# Empties the realm and leaves the build standing: every account goes, and with
+# it every character and pet, the same way the repack's own pair is cleared.
+reset_world() {  # $1 the --yes flag as given
+  local n
+  n=$(DB -N -B -e "SELECT COUNT(*) FROM turtle_logon.account" 2>/dev/null) \
+    || die "the database is not answering; start it with: $0 run"
+  confirm_destructive "every account on this realm ($n) goes, and every character
+  and pet with them. The build, the world database and the client stay." "${1:-}" || return 0
+  sweep_accounts "1 = 1" || die "the database refused the sweep; nothing is guaranteed removed"
+  say "the realm is empty; the next account is id 1"
+  say "make one with: $0 account"
+}
+
+# Back to a bare checkout: what setup generated goes, what was downloaded by
+# hand stays. The client is many gigabytes and is never this script's to remove.
+reset_all() {  # $1 the --yes flag as given
+  local d
+  confirm_destructive "src/, build/, deps/ and the converted server/ go, which is
+  every part setup generated. client/ and the archives beside it stay, and
+  setup builds the rest again from them." "${1:-}" || return 0
+  stop_all
+  for d in src build deps; do
+    [[ -d "$ROOT/$d" ]] || continue
+    rm -rf "${ROOT:?}/$d" && say "removed $d/"
+  done
+  # server/ holds the kit's own scripts and its guide; the rest arrived with the
+  # repack or was made from it.
+  if [[ -d "$SERVER" ]]; then
+    find "${SERVER:?}" -mindepth 1 -maxdepth 1 \
+      ! -name '*.sh' ! -name 'README.linux.md' -exec rm -rf {} + 2>/dev/null || true
+    say "emptied server/, keeping its scripts"
+  fi
+  say "ready for a fresh conversion: $0 setup"
+}
+
+CONSOLE_SESSION=twow
+
+console_running() { command -v tmux >/dev/null 2>&1 && tmux has-session -t "$CONSOLE_SESSION" 2>/dev/null; }
+
+# What 'logs' will show. Named here so the mode, its help and its error message
+# all list the same set.
+LOG_KINDS="world realmd errors db"
+
+# LogTimestamp puts the start time in the name, so mangosd's "server.log" is on
+# disk as server_2026-08-09_21-41-17.log. The newest match is the running one.
+newest_log() {  # $1 directory, $2 name from the config
+  local base=${2%.*} ext=${2##*.} p
+  [[ -f "$1/$2" ]] && { printf '%s\n' "$1/$2"; return 0; }
+  # ls orders by modification time, which the stamped names alone cannot.
+  # shellcheck disable=SC2012
+  p=$(ls -1t "$1/${base}_"*".$ext" 2>/dev/null | head -1)
+  [[ -n "$p" ]] && printf '%s\n' "$p"
+}
+
+# Where each log is, read from the configs so a renamed one still resolves. The
+# servers run from bin/, which is what LogsDir is relative to; db is the kit's
+# own capture of a background start.
+log_path() {  # $1 kind
+  local c key f d
+  case "$1" in
+    world)  c="$SERVER/bin/mangosd.conf"; key=LogFile ;;
+    errors) c="$SERVER/bin/mangosd.conf"; key=DBErrorLogFile ;;
+    realmd) c="$SERVER/bin/realmd.conf";  key=LogFile ;;
+    db)     printf '%s\n' "$SERVER/logs/mysql.out"; return 0 ;;
+    *)      return 1 ;;
+  esac
+  [[ -f "$c" ]] || return 1
+  f=$(conf_get "$c" "$key") && [[ -n "$f" ]] || return 1
+  d=$(conf_get "$c" LogsDir) || d=""
+  d=$(cd "$SERVER/bin/${d:-../logs}" 2>/dev/null && pwd) || return 1
+  newest_log "$d" "$f"
+}
+
+show_logs() {  # $1 kind, $2 --follow
+  local kind=${1:-world} p
+  # An unknown name and a log not written yet are different answers, so the
+  # name is checked against the list before the file is looked for.
+  case " $LOG_KINDS " in
+    *" $kind "*) ;;
+    *) die "unknown log '$kind'; one of: $LOG_KINDS" ;;
+  esac
+  p=$(log_path "$kind") && [[ -n "$p" && -f "$p" ]] \
+    || die "no $kind log written yet; it appears once that server has run"
+  if [[ "${2:-}" == -f || "${2:-}" == --follow ]]; then
+    say "following ${p#"$ROOT"/}; Ctrl+C stops watching, the server keeps running"
+    exec tail -f "$p"
+  fi
+  say "last 40 lines of ${p#"$ROOT"/}"
+  tail -n 40 "$p"
+}
+
+# Back to a world console that is already running. Printed before attaching,
+# since attaching replaces this process.
+console_attach() {
+  command -v tmux >/dev/null 2>&1 \
+    || die "tmux is not installed, and the detached console is a tmux session.
+  Install it, or start the world in this terminal with: $0 run"
+  if console_running; then
+    # Ctrl+C is the reflex for leaving a terminal and is the one thing that
+    # stops the server, so both ways out are spelled out before attaching.
+    say "attaching to the world console; the mangos> prompt is the server's own"
+    say "leave it running:  your tmux prefix (Ctrl+B by default), then d"
+    say "stop the server:   Ctrl+C, or 'server shutdown 1' at the prompt"
+    exec tmux attach -t "$CONSOLE_SESSION"
+  fi
+  world_running && die "the world server is running without a console session,
+  so it was started in a terminal of its own; that terminal is its console."
+  die "no world server is running. Start one with: $0 run --detached"
+}
+
 run_all() {
   [[ -x "$SERVER/bin/mangosd" ]] || die "no native binaries yet; run: $0 setup"
-  local s
+  # 3-world-server.sh takes at most a log level, so what is left after the flag
+  # is that.
+  local s a detached=0 level=""
+  for a in "$@"; do
+    case "$a" in
+      -d|--detached) detached=1 ;;
+      *)             level="$a" ;;
+    esac
+  done
   for s in 1-start-mysql 2-realm-server 3-world-server; do
     [[ -x "$SERVER/$s.sh" ]] || die "$SERVER/$s.sh is missing or not executable;
   restore it from the repo (chmod +x)."
@@ -1439,13 +1628,24 @@ $(tail -n 15 "$SERVER/logs/realmd.out" 2>/dev/null | sed 's/^/  /')"
   fi
   say "realmd ready on $port (pid $(our_listener "$port"))"
 
+  if (( detached )); then
+    command -v tmux >/dev/null 2>&1 \
+      || die "--detached keeps the world console in a tmux session, and tmux is not installed.
+  Install it, or start the world in this terminal with: $0 run"
+    console_running && die "a world console is already running: $0 console"
+    tmux new-session -d -s "$CONSOLE_SESSION" -c "$SERVER" "./3-world-server.sh $level"
+    say "world console running in the background as tmux session '$CONSOLE_SESSION'"
+    say "first boot loads all maps and takes a few minutes; watch it with: $0 console"
+    return 0
+  fi
+
   say "starting mangosd in the foreground; this terminal is the server console"
   say "first boot loads all maps and takes a few minutes; stop with Ctrl+C"
   # Called rather than exec'd, and the note printed after it rather than from an
   # EXIT trap: exec replaces this shell outright, so a trap set here would never
   # run and nothing would say what was left behind.
   local rc=0
-  "$SERVER/3-world-server.sh" "$@" || rc=$?
+  "$SERVER/3-world-server.sh" ${level:+"$level"} || rc=$?
   warn "world server stopped; realmd and MariaDB are still running.
   Stop them with: $0 stop     (or $0 status to see what is up)"
   return $rc
@@ -1465,19 +1665,31 @@ ${C_BOLD}Modes:${C_RST}
   ${C_GREEN}setup${C_RST}          convert only: dependencies, repack, map data, source
                  checkout, ACE + server build, configs, database seed,
                  schema migrations; every step is skipped once done
-  ${C_GREEN}run${C_RST} [level]    start only: MariaDB and realmd in the background,
+  ${C_GREEN}run${C_RST} [level] [--detached]
+                 start only: MariaDB and realmd in the background,
                  mangosd in the foreground as the server console
                  (Ctrl+C stops it); optional [level] is the mangosd
-                 console log level, 0 (quiet) to 3 (debug)
+                 console log level, 0 (quiet) to 3 (debug).
+                 ${C_DIM}--detached keeps the console in a tmux session instead, so
+                 the server outlives the shell; '$0 console' returns to it.${C_RST}
+  ${C_GREEN}console${C_RST}        attach to a detached world console.
+                 ${C_DIM}Leave it running with the tmux prefix (Ctrl+B by default)
+                 then d. Ctrl+C at that prompt stops the server.${C_RST}
+  ${C_GREEN}logs${C_RST} [what] [-f]
+                 last 40 lines of a log, or -f to follow it;
+                 [what] is one of: world (default), realmd, errors, db
   ${C_GREEN}firstrun${C_RST}       the questions a finished install still has: a name for the
                  realm and a game master account, each asked only until it
                  has been answered.
                  ${C_DIM}Part of setup already; twow-vm.sh calls it on its own
                  because its conversion runs without a terminal.${C_RST}
-  ${C_GREEN}account${C_RST} [--if-none]
+  ${C_GREEN}account${C_RST} [--list | --password <name> | --if-none]
                  create a game master account and log in as yourself
                  instead of the repack's shared ADMIN. Offered once at the
                  end of setup; this runs it again whenever you want.
+                 --list shows who is here and at what level; --password
+                 changes one, which the world console allows only from its
+                 own prompt.
                  ${C_DIM}--if-none offers only while no account of your own
                  exists, which is what twow-vm.sh calls.${C_RST}
   ${C_GREEN}interactive${C_RST}    guided setup screen for the most common options:
@@ -1507,6 +1719,12 @@ ${C_BOLD}Modes:${C_RST}
                  ${C_DIM}Exits non-zero when something is wrong, so it scripts.${C_RST}
   ${C_GREEN}stop${C_RST}           stop the world, then realmd, then the database, in that
                  order; safe to run when some of them are already down
+  ${C_GREEN}reset${C_RST} --world | --all [--yes]
+                 --world empties the realm: every account, character and pet
+                 goes, and the build, the world database and the client stay.
+                 --all removes what setup generated (src/, build/, deps/ and
+                 the converted server/), keeping client/ and the archives.
+                 ${C_DIM}Both ask first; --yes answers for a run with no terminal.${C_RST}
   ${C_GREEN}realm${C_RST} <address> [--bind <address>] | --name <name>
                  set what clients are told to connect to, writing both the
                  realm address and BindIP so the two agree. 127.0.0.1 keeps
@@ -1571,10 +1789,14 @@ case "$mode" in
     # nobody has an account of their own yet, and say nothing on a re-run.
     # Without it the mode is the deliberate "make me another one".
     case "${2:-}" in
-      "")        make_gm_account ;;
-      --if-none) if has_own_gm; then say "game master account already there"
-                 else make_gm_account; fi ;;
-      *)         die "unknown option '$2'; account takes --if-none or nothing" ;;
+      "")         make_gm_account ;;
+      --if-none)  if has_own_gm; then say "game master account already there"
+                  else make_gm_account; fi ;;
+      --list)     list_accounts ;;
+      --password) [[ -n "${3:-}" ]] || die "usage: $0 account --password <name>"
+                  set_account_password "$3" ;;
+      *)          die "unknown option '$2'; account takes --list, --password <name>,
+  --if-none, or nothing to create one" ;;
     esac ;;
   realm)
     check_deps; resolve_db_port; start_native_db; ensure_db_credentials; assert_own_database
@@ -1604,9 +1826,23 @@ case "$mode" in
     sync_client_realmlist
     say "realm answers at $2, listening on ${REALM_BIND:-?}"
     say "restart the server to apply: $0 run" ;;
-  status) status_all ;;
-  doctor) doctor_all ;;
-  stop)   stop_all ;;
+  status)  status_all ;;
+  doctor)  doctor_all ;;
+  console) console_attach ;;
+  logs)    show_logs "${2:-world}" "${3:-}" ;;
+  stop)    stop_all ;;
+  reset)
+    check_deps; resolve_db_port
+    case "${2:-}" in
+      --world) start_native_db; ensure_db_credentials; assert_own_database
+               reset_world "${3:-}" ;;
+      --all)   reset_all "${3:-}" ;;
+      *) die "usage: $0 reset --world | --all   [--yes]
+  --world empties the realm: every account, character and pet goes, and the
+          build, the world database and the client stay
+  --all   removes what setup generated (src/, build/, deps/ and the converted
+          server/), keeping client/ and the archives beside it" ;;
+    esac ;;
   backup)
     check_deps; resolve_db_port; start_native_db; ensure_db_credentials; assert_own_database
     case "${2:-}" in
