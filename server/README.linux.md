@@ -68,8 +68,14 @@ before the world is stopped for maintenance, and removed afterwards.
   `apply-db-updates.sh`.
 - `./apply-db-updates.sh`: applies world migrations from `../src` that the
   database does not have yet. Required after an import, and after every git pull
-  and rebuild.
+  and rebuild. `--check` counts what is waiting and applies none.
 - `./clear-logs.sh`: empties the logs/ folder.
+
+`../setup-native.sh doctor` examines an install rather than running one:
+binaries and map data, the game databases and their pending migrations, what
+the repack's dump left behind, whether the realm listens where it advertises,
+and the firewall in front of it. It reads only, so it is safe against a running
+server, and exits non-zero when something is wrong.
 
 All of them read `../lib/kit.sh`, which holds the logging, the database handle
 and the port and process checks they share with `setup-native.sh`.

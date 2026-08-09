@@ -229,9 +229,12 @@ ensure_repack() {
 # -----------------------------------------------------------------------------
 # map data in server/data (dbc, maps, mmaps, vmaps)
 # -----------------------------------------------------------------------------
+# What DataDir has to hold before mangosd will start.
+MAPDATA_DIRS=(dbc maps mmaps vmaps)
+
 ensure_mapdata() {
   local ok=1 d
-  for d in dbc maps mmaps vmaps; do [[ -d "$SERVER/data/$d" ]] || ok=0; done
+  for d in "${MAPDATA_DIRS[@]}"; do [[ -d "$SERVER/data/$d" ]] || ok=0; done
   if ((ok)); then say "map data already in server/data/"; return; fi
   local zip="$ROOT/data.zip"
   [[ -f "$zip" ]] || die "server/data is missing dbc/maps/mmaps/vmaps and $zip not found.
@@ -796,23 +799,36 @@ ensure_database() {
 # ownerless, which is what the sweep below is for, so the order matters.
 # The pair the repack ships, recognised by the password it set them: an account
 # whose password has been changed belongs to whoever changed it.
-SEED_STOCK="username IN ('ADMIN','TEST')
-        AND sha_pass_hash = UPPER(SHA1(CONCAT(username, ':', username)))"
+# A password equal to the account's own name. Vanilla stores SHA1 of USER:PASS
+# upper-cased, so the repack's shipped pair is recognisable by the hash alone.
+SELF_PASS="sha_pass_hash = UPPER(SHA1(CONCAT(username, ':', username)))"
+SEED_STOCK="username IN ('ADMIN','TEST') AND $SELF_PASS"
 
-# What the dump still has here, counted one way so the before and after of the
-# sweep can be subtracted honestly.
+# What the dump still has here, one count each, so the sweep can subtract a
+# total honestly and the doctor mode can name what it found.
+count_stock_accounts() {
+  DB -N -B -e "SELECT COUNT(*) FROM turtle_logon.account WHERE $SEED_STOCK" 2>/dev/null
+}
+count_orphan_characters() {
+  DB -N -B -e "SELECT COUNT(*) FROM turtle_char.characters c
+     LEFT JOIN turtle_logon.account a ON a.id = c.account WHERE a.id IS NULL" 2>/dev/null
+}
+count_orphan_pets() {
+  DB -N -B -e "SELECT COUNT(*) FROM turtle_char.character_pet p
+     LEFT JOIN turtle_char.characters c ON c.guid = p.owner WHERE c.guid IS NULL" 2>/dev/null
+}
+
 seed_leftovers() {
-  DB -N -B -e "SELECT
-      (SELECT COUNT(*) FROM turtle_logon.account WHERE $SEED_STOCK)
-    + (SELECT COUNT(*) FROM turtle_char.characters c
-         LEFT JOIN turtle_logon.account a ON a.id = c.account WHERE a.id IS NULL)
-    + (SELECT COUNT(*) FROM turtle_char.character_pet p
-         LEFT JOIN turtle_char.characters c ON c.guid = p.owner WHERE c.guid IS NULL)" 2>/dev/null
+  local a b c
+  a=$(count_stock_accounts)    || return 1
+  b=$(count_orphan_characters) || return 1
+  c=$(count_orphan_pets)       || return 1
+  printf '%s\n' "$(( a + b + c ))"
 }
 
 clean_seed_leftovers() {
   local before after stock
-  stock=$(DB -N -B -e "SELECT COUNT(*) FROM turtle_logon.account WHERE $SEED_STOCK" 2>/dev/null) || stock=0
+  stock=$(count_stock_accounts) || stock=0
   before=$(seed_leftovers) || return 0
   [[ "$before" =~ ^[0-9]+$ ]] || return 0
   (( before > 0 )) || return 0
@@ -1154,6 +1170,212 @@ status_all() {
   return 0
 }
 
+# -----------------------------------------------------------------------------
+# doctor: whether the install is correct, which is a different question from the
+# one status answers. A server can run perfectly and still hand out an address
+# it does not listen on, or carry an administrator whose password is its own
+# name.
+#
+# Read-only throughout, so it is safe against a live server, and each finding
+# carries the command that settles it. What the conversion has learned about
+# this repack lives here as a check rather than as prose somebody has to read.
+#
+# bad  something that stops the server working, or lets in who should not be
+# note worth knowing, breaks nothing
+# -----------------------------------------------------------------------------
+DOC_BAD=0 DOC_NOTE=0
+
+dr_head() { printf '\n%s%s%s\n' "$C_BOLD" "$1" "$C_RST"; }
+dr_ok()   { printf '  %sok%s    %s\n' "$C_GREEN" "$C_RST" "$1"; }
+dr_note() { printf '  %snote%s  %s\n' "$C_YELLOW" "$C_RST" "$1"; DOC_NOTE=$(( DOC_NOTE + 1 )); }
+dr_skip() { printf '  %sskip  %s%s\n' "$C_DIM" "$1" "$C_RST"; }
+# $1 what is wrong, $2 what settles it
+dr_bad()  {
+  printf '  %sbad%s   %s\n        %sfix: %s%s\n' "$C_RED" "$C_RST" "$1" "$C_DIM" "$2" "$C_RST"
+  DOC_BAD=$(( DOC_BAD + 1 ))
+}
+
+# A count from the database, or empty when it cannot be had. Every database
+# check goes through this so one unreachable server reads as skipped rather
+# than as zero findings.
+dr_count() {  # $1 sql returning one number
+  local n
+  n=$(DB -N -B -e "$1" 2>/dev/null) || return 1
+  [[ "$n" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$n"
+}
+
+doctor_install() {
+  local M="$SERVER/bin/mangosd.conf" R="$SERVER/bin/realmd.conf" d missing=()
+  dr_head "install"
+  if [[ -x "$SERVER/bin/mangosd" && -x "$SERVER/bin/realmd" ]]; then
+    dr_ok "mangosd and realmd are built"
+  else
+    dr_bad "server/bin has no built mangosd and realmd" "$0 setup"
+  fi
+  if [[ -f "$M" && -f "$R" ]]; then
+    dr_ok "mangosd.conf and realmd.conf are in place"
+  else
+    dr_bad "server/bin is missing mangosd.conf or realmd.conf" "$0 setup"
+  fi
+  for d in "${MAPDATA_DIRS[@]}"; do [[ -d "$SERVER/data/$d" ]] || missing+=("$d"); done
+  if (( ${#missing[@]} )); then
+    dr_bad "server/data is missing ${missing[*]}, which mangosd needs to start" "$0 setup"
+  else
+    dr_ok "map data present (${MAPDATA_DIRS[*]})"
+  fi
+}
+
+# Whether the database this install owns can be asked anything. db.env is what
+# makes it this install's: without it the connection lands on whatever answers
+# on 3306, whose state says nothing about the folder being examined.
+dr_db_ready() {
+  [[ -f "$SERVER/db.env" ]] || return 1
+  dr_count "SELECT 1" >/dev/null
+}
+
+doctor_database() {
+  local db n pending absent=0
+  dr_head "database"
+  if ! dr_db_ready; then
+    dr_skip "no database answering for this install, so its checks are left out ($0 run)"
+    return 0
+  fi
+  dr_ok "the database answers on $TWOW_DB_HOST:${TWOW_DB_PORT:-3306}"
+  for db in turtle_logon turtle_char turtle_world turtle_logs; do
+    n=$(dr_count "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = '$db'") || n=0
+    (( n )) || { dr_bad "the $db database is missing" "$0 setup"; absent=1; }
+  done
+  (( absent )) || dr_ok "all four game databases are present"
+
+  if [[ -x "$SERVER/apply-db-updates.sh" && -d "$ROOT/src/sql/database_updates" ]]; then
+    if pending=$("$SERVER/apply-db-updates.sh" --check 2>/dev/null) && [[ "$pending" =~ ^[0-9]+$ ]]; then
+      if (( pending )); then
+        dr_note "$pending world migration(s) from src/ are not applied yet ($0 update)"
+      else
+        dr_ok "world migrations are up to date with src/"
+      fi
+    else
+      dr_skip "the migration state could not be read"
+    fi
+  else
+    dr_skip "no source checkout, so migrations are left out"
+  fi
+}
+
+doctor_dump() {
+  local n
+  dr_head "what the repack's dump carries"
+  if ! dr_db_ready; then
+    dr_skip "no database answering for this install, so its checks are left out"
+    return 0
+  fi
+  n=$(count_stock_accounts) || n=0
+  if (( n )); then
+    dr_bad "$n of the repack's own accounts are still here at their shipped password" "$0 setup"
+  else
+    dr_ok "the repack's ADMIN and TEST are gone"
+  fi
+  n=$(dr_count "SELECT COUNT(*) FROM turtle_logon.account WHERE \`rank\` >= 3 AND $SELF_PASS") || n=0
+  if (( n )); then
+    dr_note "$n game master account(s) have their own name as the password"
+  else
+    dr_ok "no game master account carries its own name as a password"
+  fi
+  n=$(count_orphan_characters) || n=0
+  if (( n )); then
+    dr_bad "$n character(s) belong to accounts that are not here" "$0 setup"
+  else
+    dr_ok "every character belongs to an account that exists"
+  fi
+  n=$(count_orphan_pets) || n=0
+  if (( n )); then
+    dr_bad "$n pet(s) have no owner, which the next character made inherits" "$0 setup"
+  else
+    dr_ok "every pet has an owner"
+  fi
+}
+
+doctor_reach() {
+  local R="$SERVER/bin/realmd.conf" M="$SERVER/bin/mangosd.conf" addr rbind mbind
+  local f="$ROOT/client/realmlist.wtf" want cur be rc p closed=()
+  dr_head "reach"
+  [[ -f "$R" && -f "$M" ]] || { dr_skip "no configs yet, so reach is left out"; return 0; }
+  rbind=$(conf_get "$R" BindIP); mbind=$(conf_get "$M" BindIP)
+  if [[ "$rbind" != "$mbind" ]]; then
+    dr_bad "realmd binds $rbind and mangosd binds $mbind" "$0 realm <address>"
+  fi
+  if ! addr=$(realm_address) || [[ -z "$addr" ]]; then
+    dr_skip "the realm row could not be read, so the address is left out"
+  elif [[ "$rbind" == 0.0.0.0 || "$rbind" == "$addr" ]]; then
+    dr_ok "the realm advertises $addr and listens on $rbind"
+  else
+    dr_bad "the realm advertises $addr while listening only on $rbind, so nothing reaches it" \
+           "$0 realm $addr"
+  fi
+
+  if [[ -d "$ROOT/client" ]] && [[ -n "${addr:-}" ]]; then
+    want="set realmlist $addr"
+    cur=$(head -1 "$f" 2>/dev/null | tr -d '\r')
+    if [[ "$cur" == "$want" ]]; then
+      dr_ok "client/realmlist.wtf points at $addr"
+    else
+      dr_bad "client/realmlist.wtf reads '${cur:-nothing}'" "$0 realm $addr"
+    fi
+  fi
+
+  # Only a realm somebody else is meant to reach can be blocked in a way that
+  # matters here.
+  if [[ -n "${addr:-}" && "$addr" != 127.0.0.1 ]]; then
+    be=$(fw_backend)
+    if [[ -z "$be" ]]; then
+      dr_ok "no firewall is running here"
+    else
+      for p in "$(realm_port)" "$(world_port)"; do
+        rc=0; fw_port_state "$be" "$p" || rc=$?
+        (( rc == 2 )) && { dr_skip "$be is running and reading it needs a password"; break; }
+        (( rc == 1 )) && closed+=("$p")
+      done
+      if (( ${#closed[@]} )); then
+        dr_bad "$be has tcp ${closed[*]} closed, which clients need" "$(fw_open_command "$be" "${closed[@]}")"
+      elif (( rc != 2 )); then
+        dr_ok "$be has the realm and world ports open"
+      fi
+    fi
+  fi
+}
+
+doctor_config() {
+  local M="$SERVER/bin/mangosd.conf"
+  dr_head "configuration"
+  [[ -f "$M" ]] || { dr_skip "no mangosd.conf yet"; return 0; }
+  # The core defaults this on when the line is absent, which puts a listener on
+  # 127.0.0.1:50000 that only the config turns off.
+  if ! conf_has "$M" HttpApi.Enable; then
+    dr_note "mangosd.conf names no HttpApi.Enable, and the core defaults it on"
+  elif [[ "$(conf_get "$M" HttpApi.Enable)" == 0 ]]; then
+    dr_ok "the HTTP API is off"
+  else
+    dr_note "the HTTP API is on, listening on $(conf_get "$M" HttpApi.BindIP):$(conf_get "$M" HttpApi.BindPort)"
+  fi
+}
+
+doctor_all() {
+  DOC_BAD=0 DOC_NOTE=0
+  doctor_install
+  doctor_database
+  doctor_dump
+  doctor_reach
+  doctor_config
+  printf '\n'
+  if (( DOC_BAD )); then
+    printf '%s%d problem(s)%s, %d note(s)\n' "$C_RED" "$DOC_BAD" "$C_RST" "$DOC_NOTE"
+    return 1
+  fi
+  printf '%sno problems%s, %d note(s)\n' "$C_GREEN" "$C_RST" "$DOC_NOTE"
+  return 0
+}
+
 # Stopped in the order they depend on each other: the world writes characters
 # back through the database, so the database outlives it, and realmd sits
 # between them. Each step is skipped when that piece is already down, so this
@@ -1277,6 +1499,12 @@ ${C_BOLD}Modes:${C_RST}
                  ${C_DIM}turtle_world is not backed up here: setup and update
                  rebuild it. Characters and accounts cannot be rebuilt.${C_RST}
   ${C_GREEN}status${C_RST}         what is running: database, realmd, world, and their ports
+  ${C_GREEN}doctor${C_RST}         whether the install is correct, which is the other question:
+                 binaries and map data, the game databases and their pending
+                 migrations, what the repack's dump left behind, whether the
+                 realm listens where it advertises, and the firewall in front
+                 of it. Reads only, and names the fix beside each finding.
+                 ${C_DIM}Exits non-zero when something is wrong, so it scripts.${C_RST}
   ${C_GREEN}stop${C_RST}           stop the world, then realmd, then the database, in that
                  order; safe to run when some of them are already down
   ${C_GREEN}realm${C_RST} <address> [--bind <address>] | --name <name>
@@ -1377,6 +1605,7 @@ case "$mode" in
     say "realm answers at $2, listening on ${REALM_BIND:-?}"
     say "restart the server to apply: $0 run" ;;
   status) status_all ;;
+  doctor) doctor_all ;;
   stop)   stop_all ;;
   backup)
     check_deps; resolve_db_port; start_native_db; ensure_db_credentials; assert_own_database

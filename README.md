@@ -146,6 +146,9 @@ Setup clears all of it, so the realm starts empty and the first account and
 character are yours. An account whose password has been changed is somebody's
 own and stays, as does any character that has an account.
 
+`./setup-native.sh doctor` checks for each of these, so a later repack that
+carries something similar is caught before anyone plays on it.
+
 ## Configure your server
 
 ```
@@ -168,14 +171,21 @@ the world database, and applies any new schema migrations (stop the world
 server first). `./setup-native.sh help` shows all modes. Day-to-day
 operation is documented in `server/README.linux.md`.
 
+`./setup-native.sh status` reports what is running. `./setup-native.sh doctor`
+answers the other question, whether the install is correct: binaries and map
+data, the game databases and any migrations still waiting, what the repack's
+dump left behind, whether the realm listens where it advertises, and the
+firewall in front of it. It reads only, names the fix beside each finding, and
+exits non-zero when something is wrong.
+
 First boot: setup offers a name for the realm, who can reach it, and a game
 master account, and points `client/realmlist.wtf` at this realm; a client
 carried over from the live game arrives pointed at Turtle's own login server.
 `./setup-native.sh account` creates further accounts, and the world console
 takes `account create <name> <pass>` just as well. The name can be changed later
 with `./setup-native.sh realm --name <name>`, the address with
-`./setup-native.sh realm <address>`, or both from the interactive screen. The realm shows OFFLINE in the realm list on local servers;
-that is cosmetic.
+`./setup-native.sh realm <address>`, or both from the interactive screen. The
+realm shows OFFLINE in the realm list on local servers; that is cosmetic.
 
 ## Credits
 
