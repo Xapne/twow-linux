@@ -240,8 +240,15 @@ from the live game arrives pointed at Turtle's own login server.
 `./twow.sh account` creates further accounts, and the world console
 takes `account create <name> <pass>` just as well. The name can be changed later
 with `./twow.sh realm --name <name>`, the address with
-`./twow.sh realm <address>`, or both from the interactive screen. The
-realm shows OFFLINE in the realm list on local servers; that is cosmetic.
+`./twow.sh realm <address>`, or both from the interactive screen.
+
+The realm list marks the realm OFFLINE at all times, and logging in works
+regardless: the flag is advisory, and the two halves of the core hold different
+client build numbers. realmd compares against 7272, compiled into
+`realmd/RealmList.cpp`, while the world server accepts 5875 in
+`game/Database/DBCStores.cpp`, which is what the client sends. Every realm-list
+answer therefore carries the offline flag. `./twow.sh status` and
+`./twow.sh doctor` report what is actually running.
 
 ## Credits
 
