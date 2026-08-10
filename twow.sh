@@ -1407,6 +1407,18 @@ doctor_reach() {
   local f="$ROOT/client/realmlist.wtf" want cur be rc p closed=()
   dr_head "reach"
   [[ -f "$R" && -f "$M" ]] || { dr_skip "no configs yet, so reach is left out"; return 0; }
+
+  # A world part way through its load answers nothing, which a client meets as a
+  # hang on "Logging into game server". Asked first, since agreeing addresses
+  # still leave that wait in front of them.
+  if world_ready; then
+    dr_ok "the world is accepting logins on $(world_port)"
+  elif world_running; then
+    dr_note "the world is still loading; logins are taken once it opens $(world_port)"
+  else
+    dr_skip "the world server is down, so logins are left out ($0 status)"
+  fi
+
   rbind=$(conf_get "$R" BindIP); mbind=$(conf_get "$M" BindIP)
   if [[ "$rbind" != "$mbind" ]]; then
     dr_bad "realmd binds $rbind and mangosd binds $mbind" "$0 realm <address>"
@@ -1653,6 +1665,38 @@ console_attach() {
   die "no world server is running. Start one with: $0 run --detached"
 }
 
+# How long a detached start watches before it leaves the world to load on its
+# own. Loading is seconds on warm hardware and longer on a cold first boot, so
+# the cap is generous and reaching it reads as slow rather than as broken.
+WORLD_WAIT=120
+
+# Which of three things became of a world just handed to tmux: the realm opened
+# its port, the console session ended while loading, or loading was still going
+# at the cap. The session is what is watched, since 3-world-server.sh brings
+# mangosd back after a crash and the process alone flaps in between.
+wait_for_world() {
+  local waited=0 p
+  until world_ready; do
+    if ! console_running; then
+      warn "the world server stopped after ${waited}s, while it was still loading"
+      p=$(log_path world) || p=""
+      [[ -n "$p" && -f "$p" ]] && {
+        say "last 15 lines of ${p#"$ROOT"/}:"
+        tail -n 15 "$p" | sed 's/^/  /'
+      }
+      return 1
+    fi
+    (( waited < WORLD_WAIT )) || {
+      say "still loading after ${WORLD_WAIT}s; watch it with: $0 console"
+      return 0
+    }
+    sleep 1
+    waited=$(( waited + 1 ))
+  done
+  say "the realm is accepting logins on $(world_port), after ${waited}s"
+  return 0
+}
+
 run_all() {
   [[ -x "$SERVER/bin/mangosd" ]] || die "no native binaries yet; run: $0 setup"
   # 3-world-server.sh takes at most a log level, which is whatever is left once
@@ -1690,13 +1734,10 @@ $(tail -n 15 "$SERVER/logs/realmd.out" 2>/dev/null | sed 's/^/  /')"
     console_running && die "a world console is already running: $0 console"
     tmux new-session -d -s "$CONSOLE_SESSION" -c "$SERVER" "./3-world-server.sh $level"
     # tmux reports success the moment the session exists, so a world that
-    # refuses to start looks the same as one that came up. The session dies
-    # with its command, which is what distinguishes them.
-    sleep 3
-    console_running || die "the world server stopped as soon as it started.
-  Start it in this terminal to see what it says: $0 run${level:+ $level}"
+    # refuses to start looks the same as one that came up, and one still loading
+    # looks like one taking clients. Both are settled by watching.
     say "world console running in the background as tmux session '$CONSOLE_SESSION'"
-    say "first boot loads all maps and takes a few minutes; watch it with: $0 console"
+    wait_for_world || die "start it in this terminal to see what it says: $0 run${level:+ $level}"
     return 0
   fi
 

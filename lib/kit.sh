@@ -132,6 +132,12 @@ server_pids() {  # $1 binary name in server/bin
 world_running() { [[ -n "$(server_pids mangosd)" ]]; }
 realm_running() { [[ -n "$(server_pids realmd)" ]]; }
 
+# Whether the world takes clients. The core opens this port once every map and
+# table is loaded (StartNetwork follows SetInitialWorldSettings in
+# mangosd/Master.cpp), which makes the port the readiness signal, and one that
+# holds at every console log level.
+world_ready() { [[ -n "$(our_listener "$(world_port)")" ]]; }
+
 # The pid holding a port, but only when the binary behind it is one of ours.
 # Anything may listen on 3724: a second install of this kit, a repack still
 # running under wine, or a virtual machine forwarding the port from a guest.
