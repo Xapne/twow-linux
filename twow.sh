@@ -1595,7 +1595,7 @@ console_running() { command -v tmux >/dev/null 2>&1 && tmux has-session -t "$CON
 
 # What 'logs' will show. Named here so the mode, its help and its error message
 # all list the same set.
-LOG_KINDS="world realmd errors db"
+LOG_KINDS="world realmd errors db stderr"
 
 # LogTimestamp puts the start time in the name, so mangosd's "server.log" is on
 # disk as server_2026-08-09_21-41-17.log. The newest match is the running one.
@@ -1618,6 +1618,9 @@ log_path() {  # $1 kind
     errors) c="$SERVER/bin/mangosd.conf"; key=DBErrorLogFile ;;
     realmd) c="$SERVER/bin/realmd.conf";  key=LogFile ;;
     db)     printf '%s\n' "$SERVER/logs/mysql.out"; return 0 ;;
+    # Both are the kit's own capture rather than a file the core names, so the
+    # path is fixed here instead of read from a config.
+    stderr) printf '%s\n' "$SERVER/logs/stderr.log"; return 0 ;;
     *)      return 1 ;;
   esac
   [[ -f "$c" ]] || return 1
@@ -1684,6 +1687,9 @@ wait_for_world() {
         say "last 15 lines of ${p#"$ROOT"/}:"
         tail -n 15 "$p" | sed 's/^/  /'
       }
+      # A start that fails before the core opens its log file leaves its reason
+      # on stderr alone, which is the one place that holds it.
+      say "a start that got no further than its first message: $0 logs stderr"
       return 1
     fi
     (( waited < WORLD_WAIT )) || {
@@ -1779,7 +1785,11 @@ ${C_BOLD}Modes:${C_RST}
                  then d. Ctrl+C at that prompt stops the server.${C_RST}
   ${C_GREEN}logs${C_RST} [what] [-f]
                  last 40 lines of a log, or -f to follow it;
-                 [what] is one of: world (default), realmd, errors, db
+                 [what] is one of: world (default), realmd, errors, db,
+                 stderr.
+                 ${C_DIM}The console shows the world's own output and its prompt;
+                 the errors the core also writes to stderr are kept in
+                 'logs stderr', and in the world log beside them.${C_RST}
   ${C_GREEN}firstrun${C_RST}       the questions a finished install still has: a name for the
                  realm, who can reach it, whether the repack's timed broadcast
                  keeps running, and a game master account, each asked only

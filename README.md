@@ -215,8 +215,8 @@ tmux is all `--detached` needs; plain `run` works without it.
 
 More modes:
 
-- `./twow.sh logs [world|realmd|errors|db] [-f]` - last 40 lines of a log, or
-  `-f` to follow it
+- `./twow.sh logs [world|realmd|errors|db|stderr] [-f]` - last 40 lines of a
+  log, or `-f` to follow it
 - `./twow.sh account --list` - who has an account and at what level;
   `--password <name>` changes one from a shell
 - `./twow.sh reset --world` - empties the realm; the build, the world database

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Starts the world server (mangosd) in the foreground, on port 8091 by default.
-# Ready when it reports the world is initialized; the first boot loads every map
-# and takes a few minutes. This terminal is also the server console
+# Ready when it reports "World server is up and running!", which carries the
+# loading time. This terminal is also the server console
 # (e.g. "account create <user> <pass>").
 #
 # Usage: ./3-world-server.sh [loglevel]
@@ -90,10 +90,18 @@ halt() {
   return 1
 }
 
+# The core writes every error to stderr and to its log files both, and neither
+# outError nor outErrorDb consults LogLevel (src/shared/Log.cpp), so the repack's
+# content errors reach the terminal at every setting. The terminal copy is put
+# here instead, which leaves the console to the server's own output and prompt.
+ERRLOG="$SERVER/logs/stderr.log"
+mkdir -p "$SERVER/logs"
+say "errors are kept in logs/server.log and logs/${ERRLOG##*/}"
+
 cd "$SERVER/bin"
 while :; do
   set +e
-  ./mangosd -c mangosd.conf
+  ./mangosd -c mangosd.conf 2>>"$ERRLOG"
   code=$?
   set -e
   halt && exit 0

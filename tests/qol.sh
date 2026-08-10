@@ -27,8 +27,13 @@ expect "the world log comes from mangosd.conf"  "$(log_path world)"  "$LOGS/serv
 expect "the error log comes from mangosd.conf"  "$(log_path errors)" "$LOGS/errors.log"
 expect "the realmd log comes from realmd.conf"  "$(log_path realmd)" "$LOGS/Realmd.log"
 expect "the database log is the kit's capture"  "$(log_path db)"     "$TMP/server/logs/mysql.out"
+# The core names neither of these, so both are fixed paths rather than config
+# lookups, and a config naming no LogFile still resolves them.
+expect "the stderr log is the kit's capture too" "$(log_path stderr)" "$TMP/server/logs/stderr.log"
 if log_path nonsense >/dev/null 2>&1; then rc=0; else rc=1; fi
 expect "an unknown log is refused" "$rc" 1
+case " $LOG_KINDS " in *" stderr "*) rc=0;; *) rc=1;; esac
+expect "and stderr is one the mode offers" "$rc" 0
 
 # A renamed log still resolves, which is the reason the configs are read.
 printf 'LogsDir = "../logs"\nLogFile = "renamed.log"\n' > "$TMP/server/bin/mangosd.conf"

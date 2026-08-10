@@ -52,8 +52,9 @@ logs apart:
 
 1. `./1-start-mysql.sh`   - ready at "ready for connections"
 2. `./2-realm-server.sh`  - ready at "Login server is up and running"
-3. `./3-world-server.sh [loglevel]` - ready at "World initialized"; this
-   terminal is the server console (account create <user> <pass>).
+3. `./3-world-server.sh [loglevel]` - ready at "World server is up and
+   running!", which carries the loading time and prints at every log level;
+   this terminal is the server console (account create <user> <pass>).
    Optional loglevel 0-3 sets console verbosity in mangosd.conf before
    launch (0 near-silent, 1 errors only, 2 detail, 3 debug). Same argument
    works on `twow.sh run [loglevel]`. Log files keep their own
@@ -110,6 +111,13 @@ and the port and process checks they share with `twow.sh`.
   `../twow.sh run --detached` gives it one that outlives the shell, and
   `../twow.sh console` returns to it. A systemd unit is the other way, and needs
   `Console.Enable = 0` in `bin/mangosd.conf`, which trades the console away.
+- The repack's world database carries thousands of content rows the core
+  reports on and then works around, at about 2500 error lines per start. The
+  core writes each of them to stderr and to its log files both, and consults
+  LogLevel for neither, so `3-world-server.sh` keeps the stderr copy in
+  `logs/stderr.log` and leaves the console to the server's own output and its
+  prompt. `../twow.sh logs stderr` reads it, and `logs world` holds the same
+  lines in the core's own log.
 - Ports: MySQL per `db.env` (3306 unless taken), 3724 realmd (auth), 8091
   mangosd (world). The bind follows the realm's address, asked at first boot and
   changed with `./twow.sh realm <address>`; Section 14 of the setup guide
