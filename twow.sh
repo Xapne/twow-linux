@@ -595,6 +595,59 @@ offer_realm_address() {
   fi
 }
 
+# What the world says on its own. The rows in autobroadcast name strings in
+# mangos_string, one of which goes out to every player each time the interval
+# below elapses.
+broadcast_count() { DB -N -B -e "SELECT COUNT(*) FROM turtle_world.autobroadcast" 2>/dev/null; }
+
+broadcast_text() {
+  DB -N -B -e "SELECT s.content_default
+     FROM turtle_world.autobroadcast a
+     JOIN turtle_world.mangos_string s ON s.entry = a.string_id LIMIT 1" 2>/dev/null
+}
+
+clear_broadcasts() { DB -e "DELETE FROM turtle_world.autobroadcast"; }
+
+# Minutes between broadcasts, taken from the file the core reads. An absent key
+# leaves the core on its compiled-in minute, which stands in here.
+broadcast_minutes() {
+  local ms
+  ms=$(conf_get "$SERVER/bin/mangosd.conf" AutoBroadcast.Timer 2>/dev/null) || ms=""
+  [[ "$ms" =~ ^[0-9]+$ ]] || ms=60000
+  (( ms >= 60000 )) || ms=60000
+  printf '%s\n' $(( ms / 60000 ))
+}
+
+# The repack ships one autobroadcast, a disclaimer for a realm somebody might
+# take for Turtle's own. Whoever converts an install already knows what it is,
+# which leaves the line to taste.
+#
+# Asked while the repack's rows are in place, the way the realm name is. A
+# database that refuses the delete leaves the rows and the setup carries on.
+offer_broadcast() {
+  local n text mins
+  n=$(broadcast_count) || return 0
+  [[ "$n" =~ ^[0-9]+$ ]] || return 0
+  (( n > 0 )) || return 0
+  mins=$(broadcast_minutes)
+  ui_intro "the realm broadcasts to everyone playing"
+  text=$(broadcast_text) || text=""
+  [[ -n "$text" ]] && ui_note "\"$text\""
+  ui_note "sent in chat every $mins minutes, to every player, while the world runs"
+  ui_select "Keep it?" 0 \
+    "Yes, keep the repack's broadcast" \
+    "No, the realm broadcasts nothing"
+  if (( ANSWER == 0 )); then
+    ui_outro "left as the repack ships it"
+  elif clear_broadcasts; then
+    ui_outro "the realm broadcasts nothing"
+  else
+    ui_warn "could not empty turtle_world.autobroadcast"
+    ui_outro "left as the repack ships it"
+  fi
+  return 0
+}
+
 # What a finished install still has to ask, listed once. twow-vm.sh runs the
 # conversion detached, which leaves it without a terminal, and calls this over
 # one afterwards, so a question added here reaches every path.
@@ -609,6 +662,7 @@ first_run_questions() {
   addr=$(realm_address) || addr=""
   bind=$(conf_get "$SERVER/bin/realmd.conf" BindIP 2>/dev/null) || bind=""
   [[ "$addr" == 127.0.0.1 && "$bind" == 127.0.0.1 ]] && offer_realm_address "$addr"
+  offer_broadcast
   has_own_gm || make_gm_account
 }
 

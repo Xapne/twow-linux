@@ -221,9 +221,10 @@ More modes:
 
 Both `reset` forms ask before doing anything.
 
-First boot: setup offers a name for the realm, who can reach it, and a game
-master account, and points `client/realmlist.wtf` at this realm; a client
-carried over from the live game arrives pointed at Turtle's own login server.
+First boot: setup offers a name for the realm, who can reach it, whether the
+repack's timed broadcast to every player keeps running, and a game master
+account, and points `client/realmlist.wtf` at this realm; a client carried over
+from the live game arrives pointed at Turtle's own login server.
 `./twow.sh account` creates further accounts, and the world console
 takes `account create <name> <pass>` just as well. The name can be changed later
 with `./twow.sh realm --name <name>`, the address with
