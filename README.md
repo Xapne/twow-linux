@@ -13,6 +13,11 @@ wherever your distro keeps it. Tested on Arch, Debian 13, and Debian 12 in a
 Proxmox LXC container, where it runs as root beside the packaged MariaDB and
 sizes the compile to what the container is given.
 
+The build takes about a gigabyte of memory per parallel job, and follows a
+container's limits on its own. `TWOW_BUILD_JOBS=4 ./twow.sh` sets the count by
+hand, which suits a machine whose memory is tighter than its core count
+suggests.
+
 A Debian or Ubuntu box starts its packaged MariaDB on 3306 as soon as it is
 installed. This server notices, takes the next free port for its own database,
 and writes the port it settled on to `server/db.env`. Free 3306 up beforehand
@@ -218,8 +223,15 @@ More modes:
   and the client stay
 - `./twow.sh reset --all` - removes what setup generated, keeping `client/` and
   the archives, so a conversion starts again from what is downloaded
+- `./twow.sh backup` - dumps characters and accounts into `server/backups`,
+  keeping the newest 10 of each; safe to run while the server is up.
+  `--restore <file>` puts one back. `setup` and `update` rebuild the world
+  database, so these two hold what only this realm has
+- `./twow.sh stop` - stops the world, then realmd, then the database, in the
+  order they depend on each other
 
-Both `reset` forms ask before doing anything.
+`reset` and `backup --restore` ask before doing anything; `--yes` carries the
+answer where a run has no terminal to ask on.
 
 First boot: setup offers a name for the realm, who can reach it, whether the
 repack's timed broadcast to every player keeps running, and a game master

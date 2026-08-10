@@ -1781,8 +1781,9 @@ ${C_BOLD}Modes:${C_RST}
                  last 40 lines of a log, or -f to follow it;
                  [what] is one of: world (default), realmd, errors, db
   ${C_GREEN}firstrun${C_RST}       the questions a finished install still has: a name for the
-                 realm and a game master account, each asked only until it
-                 has been answered.
+                 realm, who can reach it, whether the repack's timed broadcast
+                 keeps running, and a game master account, each asked only
+                 until it has been answered.
                  ${C_DIM}Part of setup already; twow-vm.sh calls it on its own
                  because its conversion runs without a terminal.${C_RST}
   ${C_GREEN}account${C_RST} [--list | --password <name> | --if-none]
@@ -1850,9 +1851,8 @@ ${C_BOLD}Files:${C_RST}
   server/bin/rate.conf       Turtle's per-level-bracket kill XP tuning
   server/README.linux.md     day-to-day operation guide
 
-First boot: setup offers a name for the realm, who can reach it, and a game
-master account of your own, and points client/realmlist.wtf at this realm.
-'$0 account' makes another.
+First boot: setup asks what 'firstrun' above lists, and points
+client/realmlist.wtf at this realm. '$0 account' makes another account.
 See README.md for what to download before the first run.
 
 EOF
