@@ -49,13 +49,7 @@ TWOW_DB_HOST=${TWOW_DB_HOST:-127.0.0.1}
 TWOW_DB_PORT=${TWOW_DB_PORT:-}
 TWOW_DB_USER=${TWOW_DB_USER:-root}
 TWOW_DB_PASS=${TWOW_DB_PASS:-mangos}
-# The bundled Windows MariaDB is only borrowed once, to dump the game databases
-# out of, and it carries the password the repack shipped with. That is not this
-# server's password: TWOW_DB_PASS may be set to anything, and reusing it for the
-# seeding instance makes a fresh install fail at the one step a new password
-# cannot reach.
-TWOW_SEED_PASS=${TWOW_SEED_PASS:-mangos}
-export TWOW_DB_HOST TWOW_DB_PORT TWOW_DB_USER TWOW_DB_PASS TWOW_SEED_PASS
+export TWOW_DB_HOST TWOW_DB_PORT TWOW_DB_USER TWOW_DB_PASS
 
 DB() { mariadb -h "$TWOW_DB_HOST" -P "${TWOW_DB_PORT:-3306}" -u "$TWOW_DB_USER" -p"$TWOW_DB_PASS" --max-allowed-packet=128M "$@"; }
 
@@ -64,10 +58,6 @@ DB() { mariadb -h "$TWOW_DB_HOST" -P "${TWOW_DB_PORT:-3306}" -u "$TWOW_DB_USER" 
 # even when the credentials are refused; a password problem would otherwise look
 # like "not running" and be reported as a port clash further down.
 mariadb_running() { mariadb-admin --socket="$SERVER/db/mysql.sock" -u "$TWOW_DB_USER" -p"$TWOW_DB_PASS" ping >/dev/null 2>&1; }
-
-# Whether the game databases have already been imported. InnoDB gives each
-# database a directory, so this answers without starting the server.
-seeded() { [[ -d "$SERVER/db/turtle_logon" ]]; }
 
 # -----------------------------------------------------------------------------
 # Ports, processes and the daemon
@@ -278,8 +268,7 @@ need_realmd() {  # $1 who is asking
 # -----------------------------------------------------------------------------
 # On Debian and Ubuntu the packaged mariadb is started on 3306 as soon as it is
 # installed, so that port is frequently unavailable; a free one is picked
-# instead of requiring the system service to be disabled. 3307 is left for the
-# wine seeding instance, which picks its own free port too.
+# instead of requiring the system service to be disabled.
 resolve_db_port() {
   [[ -n "$TWOW_DB_PORT" ]] && return 0
   local p
@@ -287,7 +276,7 @@ resolve_db_port() {
            -N -B -e "SELECT @@port" 2>/dev/null) && [[ -n "$p" ]]; then
     TWOW_DB_PORT="$p"; return 0            # already running: keep the port it has
   fi
-  for p in 3306 3308 3309 3310 3311 3312; do
+  for p in 3306 3307 3308 3309 3310 3311 3312; do
     port_free "$p" || continue
     TWOW_DB_PORT="$p"
     [[ "$p" == 3306 ]] || warn "port 3306 is in use by something else (a system mariadb/mysql service?);

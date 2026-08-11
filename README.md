@@ -66,8 +66,8 @@ The script is idempotent: it skips finished steps, so re-run it freely.
 
 Shows what this system needs, what it already has, and the one command that
 installs the rest, in your distro's package names. Every mode runs the same
-check before it starts, and says everything at once - including what only the
-database seed will want later, an hour into the job.
+check before it starts, and says everything at once - including what a later
+step will want, an hour into the job.
 
 The table it reads lives in `twow.sh`, and that is where package names
 belong. `twow-vm.sh` asks for the list with `deps --packages` when it

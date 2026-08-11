@@ -381,7 +381,7 @@ $(grep -A3 '\[error\]' <<<"$tail")"
       local done_n=${ninja%/*} total_n=${ninja#*/}
       pct=$(( 35 + done_n * 50 / (total_n>0?total_n:1) )); label="compiling mangosd + realmd [$ninja]"
     elif grep -q 'migration'                <<<"$tail"; then pct=95; label="applying database migrations"
-    elif grep -q 'seeding databases'        <<<"$tail"; then pct=90; label="seeding databases through wine (one time)"
+    elif grep -q 'seeding databases'        <<<"$tail"; then pct=90; label="seeding databases from the repack (one time)"
     elif grep -q 'native MariaDB'           <<<"$tail"; then pct=87; label="starting the native database"
     elif grep -q 'compiling the server'     <<<"$tail"; then pct=35; label="configuring the build"
     elif grep -q 'building ACE'             <<<"$tail"; then pct=28; label="building the ACE library"
