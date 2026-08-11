@@ -1,0 +1,44 @@
+# Copyright (C) 2026 Xapne
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Put TurtleWoW_1.18.zip and data.zip beside this file, then: docker compose up
+name: twow
+
+services:
+  twow:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: twow-linux:latest
+    container_name: twow
+    # The seed runs a Windows x86-64 binary under wine, so the image is amd64
+    # even on an arm64 host, where Docker Desktop translates it.
+    platform: linux/amd64
+    # The world console reads from the terminal, and reaching it with
+    # 'docker attach' needs both of these.
+    stdin_open: true
+    tty: true
+    # No init here: the image already enters through tini, and asking for both
+    # leaves tini as a child of Docker's own, which it warns about.
+    restart: unless-stopped
+    # The host's loopback is where "only this machine" lives in a container.
+    # For LAN play drop the prefix from both and give the realm the host's
+    # address: docker compose exec twow ./twow.sh realm 192.168.1.50
+    ports:
+      - "127.0.0.1:3724:3724"   # realmd, where the client logs in
+      - "127.0.0.1:8091:8091"   # mangosd, the world
+    volumes:
+      # Everything a conversion makes: the build, the map data, the database
+      # and the characters in it.
+      - twow-data:/twow
+      # Brought by whoever runs this, and only ever read.
+      - ./TurtleWoW_1.18.zip:/twow/TurtleWoW_1.18.zip:ro
+      - ./data.zip:/twow/data.zip:ro
+    # The compile takes about a gigabyte per parallel job and the kit reads
+    # these limits itself, sizing the job count to whatever is granted here.
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+
+volumes:
+  twow-data:

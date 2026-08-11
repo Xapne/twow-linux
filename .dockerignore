@@ -1,0 +1,19 @@
+# The build context is the repo, and everything a conversion produces or
+# consumes is far larger than the kit itself. The zips alone are 1.4 GB and are
+# mounted at run time rather than baked in.
+.git
+# Both spellings: a pattern without ** matches the context root alone, and the
+# archives are as likely to sit beside compose.yaml as above it.
+*.zip
+**/*.zip
+client/
+src/
+build/
+deps/
+server/db/
+server/data/
+server/bin/
+server/logs/
+server/backups/
+server/mariadb-*/
+*.log
