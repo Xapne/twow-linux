@@ -68,9 +68,9 @@ converted() { [[ -x "$WORK/server/bin/mangosd" && -d "$WORK/server/db/turtle_log
 # shellcheck source=../lib/kit.sh
 . "$WORK/lib/kit.sh"
 
-# A detached start has nobody to answer the first-run questions, so setup is
-# handed no terminal and they keep their defaults. What that settled is said
-# out loud, since a realm quietly named for somebody else is worse than a wait.
+# A detached start has nobody to answer the first-run questions, so setup runs
+# without a terminal and every answer keeps its default. Which defaults those
+# were is said out loud rather than left to be discovered.
 if ! converted; then
   "$WORK/twow.sh" setup < /dev/null
   warn "converted without asking anything: the realm is called TurtleWoW, answers
