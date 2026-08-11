@@ -65,12 +65,20 @@ esac
 
 converted() { [[ -x "$WORK/server/bin/mangosd" && -d "$WORK/server/db/turtle_logon" ]]; }
 
-# Setup is handed no terminal, so the first-run questions it would ask a person
-# are left at their defaults. run is handed this one, for the console.
-converted || "$WORK/twow.sh" setup < /dev/null
-
 # shellcheck source=../lib/kit.sh
 . "$WORK/lib/kit.sh"
+
+# A detached start has nobody to answer the first-run questions, so setup is
+# handed no terminal and they keep their defaults. What that settled is said
+# out loud, since a realm quietly named for somebody else is worse than a wait.
+if ! converted; then
+  "$WORK/twow.sh" setup < /dev/null
+  warn "converted without asking anything: the realm is called TurtleWoW, answers
+  on 127.0.0.1, and has no account yet. Both are settled from here:
+      docker compose exec twow ./twow.sh interactive
+      docker compose exec twow ./twow.sh account
+  Or answer them next time by converting first: docker compose run --rm twow setup"
+fi
 
 # The address a client is told to dial. Only the host knows its own, so it
 # arrives as an environment variable and the realm mode writes it down.

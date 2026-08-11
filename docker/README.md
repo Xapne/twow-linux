@@ -15,22 +15,33 @@ repo root, the same place the rest of the setup expects them.
 
 ## Start it
 
+Convert first, with the questions in front of you:
+
+```
+docker compose run --rm twow setup
+```
+
+That extracts the repack, clones and compiles the core, seeds the databases and
+then asks the same first-run questions as every other install: the realm's name,
+who can reach it, whether the repack's broadcast keeps running, and a game
+master account. It takes 15-45 minutes on an x86-64 host, and resumes where it
+stopped if it is interrupted.
+
+Then start the realm:
+
 ```
 docker compose up -d
 docker compose logs -f
 ```
 
-The first run extracts the repack, clones and compiles the core, seeds the
-databases and starts the server, which takes 15-45 minutes on an x86-64 host.
-It is the same idempotent conversion as everywhere else, so it resumes where it
-stopped if it is interrupted.
-
-It runs unattended: the questions the kit asks a person at a terminal are left
-at their defaults, so the realm comes up called TurtleWoW and answering on
-127.0.0.1. The same screen is there whenever you want it:
+`docker compose up -d` on its own converts as well, on a machine nobody is
+watching. Every answer keeps its default there, so the realm comes up called
+TurtleWoW, answering on 127.0.0.1, without an account; the log says so, and both
+screens are reachable afterwards:
 
 ```
 docker compose exec twow ./twow.sh interactive
+docker compose exec twow ./twow.sh account
 ```
 
 The compile sizes itself to the memory the container is given: `compose.yaml`

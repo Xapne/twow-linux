@@ -1,7 +1,10 @@
 # Copyright (C) 2026 Xapne
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Put TurtleWoW_1.18.zip and data.zip beside this file, the way the setup guide
-# has them, then: docker compose up -d
+# has them. Then convert with the questions in front of you, and start after:
+#   docker compose run --rm twow setup
+#   docker compose up -d
+# 'up -d' on its own converts too, keeping every answer at its default.
 name: twow
 
 services:
