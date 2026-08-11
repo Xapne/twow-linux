@@ -290,13 +290,17 @@ GUEST
 # Runs after sync_kit, which is what puts twow.sh in place; the package
 # list is read from it rather than repeated here.
 provision() {
-  # Debian keeps mariadbd in /usr/sbin, which a non-interactive ssh shell does
-  # not carry on PATH, so it is looked for there too. The kit is asked whether
-  # it still answers rather than only whether its directory exists: a directory
-  # left by an earlier run can hold a copy too old to provision from.
-  if vm 'command -v ninja >/dev/null &&
-         { command -v mariadbd >/dev/null || [ -x /usr/sbin/mariadbd ]; } &&
-         twow/twow.sh deps --packages >/dev/null 2>&1' 2>/dev/null; then
+  # Every package the table names is put to dpkg rather than a couple of them
+  # sampled from PATH: a row added to DEPS after this guest was built passes a
+  # sampled check and is never installed, and the run then fails an hour later
+  # at the step that wanted it. Asking the kit for the list also settles whether
+  # a directory left by an earlier run holds a copy too old to provision from.
+  # The expansions belong to the guest's shell rather than this one.
+  # shellcheck disable=SC2016
+  if vm 'cd twow 2>/dev/null &&
+         pkgs=$(./twow.sh deps --packages 2>/dev/null) &&
+         [ -n "$pkgs" ] &&
+         dpkg -s $pkgs >/dev/null 2>&1' 2>/dev/null; then
     say "guest already provisioned"; return
   fi
   say "provisioning the guest (apt)"
@@ -351,7 +355,7 @@ convert() {
   say "running the conversion (this is the long one: full compile + db seed)"
   vm 'cd twow && rm -f setup.log && (nohup ./twow.sh setup > setup.log 2>&1 & echo started)' >/dev/null
 
-  local t=0 pct=2 label="checking dependencies" tail="" poll="" alive=""
+  local t=0 pct=2 label="checking dependencies" tail="" poll="" alive="" warned=""
   while :; do
     sleep 3; t=$((t+3))
     # one ssh per poll, carrying the log tail AND the liveness flag together;
@@ -374,6 +378,17 @@ $(grep -A3 '\[error\]' <<<"$tail")"
     if grep -q 'conversion complete' <<<"$tail"; then
       bar 100 "conversion complete"; printf '\n'; break
     fi
+    # A deferred dependency warns here and only fails much further down, so the
+    # bar is cleared for each new one rather than redrawn over it. The headline
+    # line is what carries, the rest of the message staying in setup.log.
+    local w
+    while IFS= read -r w; do
+      w=${w#*\[warn\] }
+      [[ -n "$w" ]] || continue
+      case "$warned" in *"|$w|"*) continue;; esac
+      warned+="|$w|"
+      printf '\r\033[2K'; warn "$w"
+    done < <(grep '\[warn\]' <<<"$tail" | sed 's/\x1b\[[0-9;]*m//g' || true)
     # milestones -> percent; the compile maps its [n/total] onto 35..85
     local ninja
     ninja=$(grep -oE '^\[[0-9]+/[0-9]+\]' <<<"$tail" | tail -1 | tr -d '[]' || true)
