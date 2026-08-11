@@ -768,8 +768,13 @@ start_native_db() {
     || die "$SERVER/1-start-mysql.sh is missing or not executable; restore it (chmod +x)."
   say "starting native MariaDB on port $TWOW_DB_PORT"
   ( cd "$SERVER" && nohup ./1-start-mysql.sh > "$SERVER/logs/mysql.out" 2>&1 & )
-  local i; for i in $(seq 1 30); do [[ -S "$SERVER/db/mysql.sock" ]] && break; sleep 1; done
-  [[ -S "$SERVER/db/mysql.sock" ]] || die "MariaDB did not come up. Last lines of ${SERVER#"$ROOT"/}/logs/mysql.out:
+  # The socket file outlives a stop that never got to clean up, so its presence
+  # is not the daemon answering: a killed container or a lost power leaves one
+  # behind, and waiting on the file alone declared the database up before it had
+  # started. ping answers for a live server whatever it makes of the password,
+  # and crash recovery is what the wait is long enough for.
+  local i; for i in $(seq 1 60); do mariadb_running && break; sleep 1; done
+  mariadb_running || die "MariaDB did not come up. Last lines of ${SERVER#"$ROOT"/}/logs/mysql.out:
 
 $(tail -n 15 "$SERVER/logs/mysql.out" 2>/dev/null | sed 's/^/  /')"
   write_db_env
