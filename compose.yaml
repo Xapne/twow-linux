@@ -1,14 +1,15 @@
 # Copyright (C) 2026 Xapne
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Put TurtleWoW_1.18.zip and data.zip beside this file, then: docker compose up
+# Put TurtleWoW_1.18.zip and data.zip beside this file, the way the setup guide
+# has them, then: docker compose up -d
 name: twow
 
 services:
   twow:
     build:
-      context: ..
+      context: .
       dockerfile: docker/Dockerfile
-    image: twow-linux:latest
+    image: ghcr.io/xapne/twow-linux:latest
     container_name: twow
     # The seed runs a Windows x86-64 binary under wine, so the image is amd64
     # even on an arm64 host, where Docker Desktop translates it.
