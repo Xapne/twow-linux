@@ -17,13 +17,12 @@ services:
     # The seed runs a Windows x86-64 binary under wine, so the image is amd64
     # even on an arm64 host, where Docker Desktop translates it.
     platform: linux/amd64
-    # The world console reads from the terminal, and reaching it with
-    # 'docker attach' needs both of these.
-    stdin_open: true
-    tty: true
     # No init here: the image already enters through tini, and asking for both
     # leaves tini as a child of Docker's own, which it warns about.
     restart: unless-stopped
+    # A stop shuts the world, realmd and the database down in turn, and the
+    # database is the slow one; the 10s default would kill it mid-flush.
+    stop_grace_period: 90s
     # The host's loopback is where "only this machine" lives in a container.
     # Both of these come from .env, which is where LAN play is turned on.
     ports:

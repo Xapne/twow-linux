@@ -1626,10 +1626,6 @@ reset_all() {  # $1 the --yes flag as given
   say "ready for a fresh conversion: $0 setup"
 }
 
-CONSOLE_SESSION=twow
-
-console_running() { command -v tmux >/dev/null 2>&1 && tmux has-session -t "$CONSOLE_SESSION" 2>/dev/null; }
-
 # What 'logs' will show. Named here so the mode, its help and its error message
 # all list the same set.
 LOG_KINDS="world realmd errors db stderr"

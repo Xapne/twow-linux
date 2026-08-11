@@ -36,29 +36,6 @@ EOF
   exit 1
 fi
 
-# The world console reads this terminal. Started without stdin held open, it
-# reaches end of file the moment the world finishes loading and shuts down
-# again, which arrives as a clean stop with nothing naming the cause.
-case "${1:-}" in
-  ""|run)
-    if [[ "$(readlink /proc/self/fd/0 2>/dev/null)" == /dev/null ]]; then
-      printf '\033[1;31m[error]\033[0m %s\n' "the world console has no terminal to read." >&2
-      cat >&2 <<'EOF'
-
-  The console is this container's main process, so stdin has to stay open or
-  the server stops as soon as it is up. Add it:
-
-    docker run -it ...          rather than  docker run -d ...
-    docker compose up -d        which sets stdin_open and tty already
-
-  Modes that only report are reachable without one:
-
-    docker compose run --rm twow doctor
-EOF
-      exit 1
-    fi;;
-esac
-
 # Anything named is a mode of its own, so 'docker compose run --rm twow doctor'
 # and 'docker compose exec twow ./twow.sh account' both reach one.
 (( $# )) && exec "$WORK/twow.sh" "$@"
@@ -95,4 +72,22 @@ fi
 conf_set "$SERVER/bin/realmd.conf"  BindIP 0.0.0.0
 conf_set "$SERVER/bin/mangosd.conf" BindIP 0.0.0.0
 
-exec "$WORK/twow.sh" run
+# The console gets a terminal of its own rather than this container's stdin, so
+# nothing that closes a terminal can end the realm and leaving it is a detach.
+"$WORK/twow.sh" run --detached
+
+# Docker stops a container by signalling this process, and the world, realmd and
+# the database want stopping in that order or the next start recovers a dirty
+# redo log.
+stopped=0
+trap 'stopped=1; "$WORK/twow.sh" stop || true' TERM INT
+
+# The session is what is watched: 3-world-server.sh brings mangosd back after a
+# crash, so the process alone flaps where the console holds. sleep waits in the
+# background because a signal arriving during a foreground one is held until it
+# returns.
+while console_running; do sleep 5 & wait $! || true; done
+
+(( stopped )) && exit 0
+die "the world console ended on its own. What it last said:
+  docker compose exec twow ./twow.sh logs world"

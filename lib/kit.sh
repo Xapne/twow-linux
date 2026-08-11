@@ -134,6 +134,11 @@ server_pids() {  # $1 binary name in server/bin
 world_running() { [[ -n "$(server_pids mangosd)" ]]; }
 realm_running() { [[ -n "$(server_pids realmd)" ]]; }
 
+# The terminal a detached world console keeps. Named here rather than in twow.sh
+# because the container's entrypoint watches the same session.
+CONSOLE_SESSION=twow
+console_running() { command -v tmux >/dev/null 2>&1 && tmux has-session -t "$CONSOLE_SESSION" 2>/dev/null; }
+
 # Whether the world takes clients. The core opens this port once every map and
 # table is loaded (StartNetwork follows SetInitialWorldSettings in
 # mangosd/Master.cpp), which makes the port the readiness signal, and one that

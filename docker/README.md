@@ -31,7 +31,7 @@ Then start the realm:
 
 ```
 docker compose up -d
-docker compose logs -f
+docker compose logs -f          # Ctrl+C stops watching, the realm keeps running
 ```
 
 `docker compose up -d` on its own converts as well, on a machine nobody is
@@ -51,19 +51,19 @@ grants 8 GB and the kit reads that limit, holding the job count to what fits.
 
 Three prompts live here, and which one to use is worth knowing.
 
-**The `mangos>` world console** is the container's main process, so attaching
-reaches it. This is where the core's own commands are: `server info`,
-`account create`, `.gm on`.
+**The `mangos>` world console** runs in a tmux session of its own inside the
+container, which an exec reaches. This is where the core's own commands are:
+`server info`, `account create`, `.gm on`.
 
 ```
-docker attach twow
+docker compose exec twow ./twow.sh console
 ```
 
-Leaving it does two different things, and both are worth knowing:
+Leaving it:
 
-- `Ctrl+P` then `Ctrl+Q` - detaches, and the server keeps running.
-- `Ctrl+C` or `Ctrl+D` - stops the server, and the container stops with it.
-  `docker compose up -d` starts it again.
+- `Ctrl+B` then `d` - detaches, and the server keeps running. Closing the
+  terminal, or losing the connection it came over, does the same.
+- `Ctrl+C`, or `server shutdown 1` at the prompt - stops the world server.
 
 **The kit's own screens** handle what is easier answered than typed. Account
 creation is one: it hashes the password and offers to set the game master level.
@@ -82,8 +82,12 @@ Both draw a terminal and `docker compose exec` gives them one; plain
 docker compose exec twow bash
 ```
 
-`docker compose logs -f` follows the console from outside, which suits reading
-along rather than typing.
+`docker compose logs` carries the conversion and the start, and the world's own
+log is followed from inside:
+
+```
+docker compose exec twow ./twow.sh logs world -f
+```
 
 ## Other modes
 
