@@ -69,11 +69,21 @@ converted() { [[ -x "$WORK/server/bin/mangosd" && -d "$WORK/server/db/turtle_log
 # are left at their defaults. run is handed this one, for the console.
 converted || "$WORK/twow.sh" setup < /dev/null
 
-# What 'twow.sh realm --bind' is for, done here because that mode reaches the
-# database and this runs before it is up. A published port arrives on the
-# container's own address, so loopback inside one is reachable by nothing.
 # shellcheck source=../lib/kit.sh
 . "$WORK/lib/kit.sh"
+
+# The address a client is told to dial. Only the host knows its own, so it
+# arrives as an environment variable and the realm mode writes it down.
+if [[ -n "${TWOW_REALM_ADDRESS:-}" ]]; then
+  mariadb_running \
+    || ( cd "$SERVER" && nohup ./1-start-mysql.sh > logs/mysql.out 2>&1 & )
+  for _ in $(seq 1 60); do mariadb_running && break; sleep 1; done
+  "$WORK/twow.sh" realm "$TWOW_REALM_ADDRESS" || true
+fi
+
+# What 'twow.sh realm --bind' is for, and last so it holds whatever address was
+# just set. A published port arrives on the container's own address, so
+# loopback inside one is reachable by nothing.
 conf_set "$SERVER/bin/realmd.conf"  BindIP 0.0.0.0
 conf_set "$SERVER/bin/mangosd.conf" BindIP 0.0.0.0
 

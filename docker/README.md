@@ -105,28 +105,31 @@ Create an account first, either with `./twow.sh account` as above or with
 
 ## LAN play
 
-Two things decide who reaches the realm, one on each side of the container, and
-both have to say the same thing.
-
-Publish on every interface rather than the host's loopback, in `compose.yaml`:
-
-```yaml
-ports:
-  - "3724:3724"
-  - "8091:8091"
-```
-
-Then give the realm the host's address and put the same one in `realmlist.wtf`:
+Copy `env.example` to `.env`, put the host's own address in it, and bring the
+server back up. Compose reads `.env` by itself:
 
 ```
+cp env.example .env
+$EDITOR .env                          # TWOW_PUBLISH_ON=0.0.0.0
+                                      # TWOW_REALM_ADDRESS=<this host's address>
 docker compose up -d --force-recreate
-docker compose exec twow ./twow.sh realm 192.168.1.50
 ```
 
-Type that address rather than taking the one offered: the interactive screen
-reads the address of the machine it runs on, which inside a container is the
-bridge network, and a realm advertising 172.17.0.2 is reachable from the
-container alone.
+That opens the published ports to the network and tells the realm what to hand
+clients, which are the two halves of the same answer: one lives on the host,
+the other inside the container. Put the same address in `realmlist.wtf`.
+
+The address is typed rather than detected because a container has no way to
+read the host's. The interactive screen offers the address of the machine it
+runs on, which here is the bridge network, and a realm advertising 172.17.0.2
+is reachable from the container alone.
+
+Running the image by hand takes the same two settings:
+
+```
+docker run -dit --name twow -e TWOW_REALM_ADDRESS=192.168.1.50 \
+  -p 3724:3724 -p 8091:8091 -v twow-data:/twow ...
+```
 
 ## Where the data lives
 

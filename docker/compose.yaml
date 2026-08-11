@@ -21,11 +21,14 @@ services:
     # leaves tini as a child of Docker's own, which it warns about.
     restart: unless-stopped
     # The host's loopback is where "only this machine" lives in a container.
-    # For LAN play drop the prefix from both and give the realm the host's
-    # address: docker compose exec twow ./twow.sh realm 192.168.1.50
+    # Both of these come from .env, which is where LAN play is turned on.
     ports:
-      - "127.0.0.1:3724:3724"   # realmd, where the client logs in
-      - "127.0.0.1:8091:8091"   # mangosd, the world
+      - "${TWOW_PUBLISH_ON:-127.0.0.1}:3724:3724"   # realmd, the login
+      - "${TWOW_PUBLISH_ON:-127.0.0.1}:8091:8091"   # mangosd, the world
+    environment:
+      # The address clients are told to connect to. A container cannot learn
+      # the host's, so it is given one here or keeps 127.0.0.1.
+      TWOW_REALM_ADDRESS: "${TWOW_REALM_ADDRESS:-}"
     volumes:
       # Everything a conversion makes: the build, the map data, the database
       # and the characters in it.
