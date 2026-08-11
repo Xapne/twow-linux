@@ -15,13 +15,14 @@ mkdir -p "$TMP/server/bin"
 : > "$TMP/server/bin/mangosd.conf"
 ROOT="$TMP" SERVER="$TMP/server"
 
-ADDR="" RBIND="" MBIND="" HTTPAPI="" STOCK=0 ORPHC=0 ORPHP=0 SELFPASS=0
+ADDR="" RBIND="" MBIND="" HTTPAPI="" STOCK=0 ORPHC=0 ORPHP=0 SELFPASS=0 RLDELAY=0
 realm_address() { printf '%s\n' "$ADDR"; }
 conf_get() {
   case "$1:$2" in
     *realmd.conf:BindIP)  printf '%s\n' "$RBIND";;
     *mangosd.conf:BindIP) printf '%s\n' "$MBIND";;
     *HttpApi.Enable)      printf '%s\n' "$HTTPAPI";;
+    *MinRealmListDelay)   printf '%s\n' "$RLDELAY";;
     *)                    printf '\n';;
   esac
 }
@@ -76,6 +77,13 @@ expect "the HTTP API left on is a note" "$(tally doctor_config)" 0/1
 
 HTTPAPI=""
 expect "no HttpApi.Enable line at all is a note" "$(tally doctor_config)" 0/1
+
+# The repack ships 1 here, which hangs a client on "Retrieving realm list".
+HTTPAPI=0 RLDELAY=1
+expect "a realm list delay above zero is a fault" "$(tally doctor_config)" 1/0
+
+RLDELAY=0
+expect "a realm list delay of zero is fine" "$(tally doctor_config)" 0/0
 
 # the exit code is what makes it scriptable
 STOCK=2 ADDR=127.0.0.1 RBIND=127.0.0.1 MBIND=127.0.0.1

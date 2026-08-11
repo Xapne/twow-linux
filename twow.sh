@@ -456,6 +456,10 @@ fix_configs() {
     sed -i -E "s@^([[:space:]]*(Login|World|Character|Logs)Database\.?Info[[:space:]]*=[[:space:]]*\")[^;\"]*;[^;\"]*;@\1$TWOW_DB_HOST;$TWOW_DB_PORT;@" "$f"
   done
   sed -i 's|^DataDir = "\.\./Data"|DataDir = "../data"|' "$SERVER/bin/mangosd.conf"
+  # The repack throttles the realm list to one request a second, which drops the
+  # second of the pair a client sends over loopback or a LAN. Realmd closes the
+  # socket on it, and the login hangs on "Retrieving realm list".
+  conf_set "$SERVER/bin/realmd.conf" MinRealmListDelay 0
   # The repack ships mangosd at LogLevel 3 with the SQL echo on, which buries the
   # console under every statement the core runs. Errors only here; the log file
   # keeps its own detail through LogFileLevel, and 'run <level>' overrides it.
@@ -1494,6 +1498,20 @@ doctor_config() {
     dr_ok "the HTTP API is off"
   else
     dr_note "the HTTP API is on, listening on $(conf_get "$M" HttpApi.BindIP):$(conf_get "$M" HttpApi.BindPort)"
+  fi
+
+  # Both of a client's realm list requests arrive in the same second on a local
+  # network, so any delay above zero hangs the login.
+  local R="$SERVER/bin/realmd.conf" d
+  if [[ -f "$R" ]]; then
+    d=$(conf_get "$R" MinRealmListDelay 2>/dev/null) || d=""
+    if [[ "$d" == 0 ]]; then
+      dr_ok "the realm list answers a client that asks twice"
+    else
+      dr_bad "realmd drops a second realm list request inside ${d:-1}s, which a client
+  on this network makes; logins hang on 'Retrieving realm list'" \
+        "set MinRealmListDelay = 0 in ${R#"$ROOT"/}, or re-run: $0 setup"
+    fi
   fi
 }
 
