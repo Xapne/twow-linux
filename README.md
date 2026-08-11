@@ -251,7 +251,8 @@ with `./twow.sh realm --name <name>`, the address with
 
 ## Donations
 
-If this setup saved an evening of fiddling, a small BTC tip is welcome:
+If this setup saved an evening of fiddling, a small BTC tip toward the work on
+these scripts is welcome:
 
 ```
 bc1qxsuelwvrs28u43eewj39rpn34g4qtkhpdwwlhe
@@ -259,5 +260,17 @@ bc1qxsuelwvrs28u43eewj39rpn34g4qtkhpdwwlhe
 
 Never required, always appreciated.
 
-For personal preservation and educational use, private local play only. No
-public hosting, no monetization.
+## License
+
+The scripts in this repo are free software under the GNU General Public
+License, version 3 or later. `LICENSE` carries the terms.
+
+    Copyright (C) 2026 Xapne
+
+The server core is Penqle's tortoise-wow, cloned at build time, and keeps the
+MaNGOS lineage's own GPL-2.0-or-later terms. The repack, the map data and the
+game client come from elsewhere and are supplied by whoever runs this; the
+copyright in them rests with their authors.
+
+This exists for preservation and for private local play. That is the spirit the
+setup is written in rather than a term of the license above.
