@@ -103,11 +103,30 @@ set realmlist 127.0.0.1
 Create an account first, either with `./twow.sh account` as above or with
 `account create <name> <pass>` at the `mangos>` prompt.
 
-For other machines on the network, give the realm the host's LAN address:
+## LAN play
+
+Two things decide who reaches the realm, one on each side of the container, and
+both have to say the same thing.
+
+Publish on every interface rather than the host's loopback, in `compose.yaml`:
+
+```yaml
+ports:
+  - "3724:3724"
+  - "8091:8091"
+```
+
+Then give the realm the host's address and put the same one in `realmlist.wtf`:
 
 ```
+docker compose up -d --force-recreate
 docker compose exec twow ./twow.sh realm 192.168.1.50
 ```
+
+Type that address rather than taking the one offered: the interactive screen
+reads the address of the machine it runs on, which inside a container is the
+bridge network, and a realm advertising 172.17.0.2 is reachable from the
+container alone.
 
 ## Where the data lives
 
