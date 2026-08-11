@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Xapne
+# SPDX-License-Identifier: GPL-3.0-or-later
 # What a detached start makes of the world it just handed to tmux. The port is
 # the readiness signal, so each of the three endings is reached by stubbing it.
 # shellcheck source=tests/_assert.sh

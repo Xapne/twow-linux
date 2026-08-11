@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Xapne
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Whether a process is this install's server. A command line proves nothing:
 # anything may carry "mangosd -c" in its arguments, and one that did made the
 # world server refuse to start.

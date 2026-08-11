@@ -1,4 +1,6 @@
 # shellcheck shell=bash
+# Copyright (C) 2026 Xapne
+# SPDX-License-Identifier: GPL-3.0-or-later
 # =============================================================================
 # Shared terminal UI: palette, gutter language and the clack-style prompts
 # =============================================================================

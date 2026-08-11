@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Xapne
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Applies pending world DB migrations from the source tree
 # (../src/sql/database_updates) that are newer than the last one recorded in
 # turtle_world.migrations. Falls back to an upsert when a file collides with

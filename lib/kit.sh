@@ -1,4 +1,6 @@
 # shellcheck shell=bash
+# Copyright (C) 2026 Xapne
+# SPDX-License-Identifier: GPL-3.0-or-later
 # =============================================================================
 # The kit's shared machinery: logging, the database handle, and the port,
 # process and config questions every entry point asks

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Xapne
+# SPDX-License-Identifier: GPL-3.0-or-later
 # offer_realm_address, with the writers and the prompts replaced, so only the
 # control flow is under test. No database and no terminal are needed.
 # shellcheck source=tests/_assert.sh

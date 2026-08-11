@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Xapne
+# SPDX-License-Identifier: GPL-3.0-or-later
 # =============================================================================
 # TurtleWoW 1.18.1: from any Linux host to a live world console, one command.
 # Parent of twow-linux/twow.sh: births a headless Debian VM, provisions

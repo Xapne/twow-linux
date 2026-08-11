@@ -1,4 +1,6 @@
 # shellcheck shell=bash
+# Copyright (C) 2026 Xapne
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Shared by the tests: where the kit is, and one assertion. Files here starting
 # with an underscore are helpers, which check.sh leaves out of the test run.
 # KIT and RC are read by the tests that source this.

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Xapne
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Starts the login server (realmd) in the foreground, on port 3724 by default.
 # Ready when it reports the login server is up and running; Ctrl+C stops it.
 #

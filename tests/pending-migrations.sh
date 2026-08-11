@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Xapne
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Which migration files count as pending. doctor asks the applier this through
 # --check, so the rule is tested where it lives.
 # shellcheck source=tests/_assert.sh

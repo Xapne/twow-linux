@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Xapne
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Replaces "Import_World_DB.bat": drops and re-imports the turtle_world DB
 # from turtle_world.sql. MySQL must be running first (./1-start-mysql.sh).
 # WARNING: turtle_world.sql is a snapshot; the compiled server may expect a

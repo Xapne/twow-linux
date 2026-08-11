@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Xapne
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Starts this server's own MariaDB in the foreground: the project-local data
 # directory in server/db, configured by server/my.cnf.
 # Ready when the log says "ready for connections"; Ctrl+C stops it.

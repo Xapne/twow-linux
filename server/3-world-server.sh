@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Xapne
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Starts the world server (mangosd) in the foreground, on port 8091 by default.
 # Ready when it reports "World server is up and running!", which carries the
 # loading time. This terminal is also the server console

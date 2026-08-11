@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Xapne
+# SPDX-License-Identifier: GPL-3.0-or-later
 # =============================================================================
 # The kit's check gate: shell syntax, shellcheck, and the tests in tests/.
 # .github/workflows/check.yml runs this same script, so a green run here is a

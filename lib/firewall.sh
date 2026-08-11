@@ -1,4 +1,6 @@
 # shellcheck shell=bash
+# Copyright (C) 2026 Xapne
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Firewall help, shared by twow.sh and twow-vm.sh. Expects lib/ui.sh to
 # be sourced already, for ui_select, and the including script's say/warn.
 #

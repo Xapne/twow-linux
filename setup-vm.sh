@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Xapne
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Renamed to twow-vm.sh, alongside twow.sh. This stands in so an existing work
 # directory keeps working, and goes at some later point.
 set -euo pipefail

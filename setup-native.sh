@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Xapne
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Renamed to twow.sh, which is what a script with thirteen modes had grown into.
 # This stands in so an install carrying the old name keeps working, and goes at
 # some later point.

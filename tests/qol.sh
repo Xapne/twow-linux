@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Xapne
+# SPDX-License-Identifier: GPL-3.0-or-later
 # The conveniences: password hashing, where a log lives, how run splits its
 # arguments, and that a destructive step is agreed to before it runs.
 # shellcheck source=tests/_assert.sh
@@ -96,5 +98,15 @@ expect "--yes stands in for the answer" "$rc" 0
 
 if ( confirm_destructive "test" "" ) >/dev/null 2>&1; then rc=0; else rc=1; fi
 expect "no terminal and no --yes refuses" "$rc" 1
+
+# --- the notice the GPL's appendix asks for ----------------------------------
+# Every element that appendix names is checked here, since a notice is the kind
+# of text that drifts out of date without anything failing.
+notice=$(show_license)
+for want in "twow-linux" "Copyright (C) 2026" "Xapne" "ABSOLUTELY NO WARRANTY" \
+            "version 3 or later" "LICENSE" "xapne@protonmail.ch"; do
+  case "$notice" in *"$want"*) rc=0;; *) rc=1;; esac
+  expect "the notice carries '$want'" "$rc" 0
+done
 
 exit $RC

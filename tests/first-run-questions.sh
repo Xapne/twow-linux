@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Xapne
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Which states make first_run_questions ask how far the realm reaches. The
 # loopback the repack ships is the one that asks; a wider bind under the same
 # address is twow-vm.sh's port forward and is left alone.

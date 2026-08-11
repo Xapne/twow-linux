@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Xapne
+# SPDX-License-Identifier: GPL-3.0-or-later
 # What doctor reports, with the database, the configs and the firewall replaced.
 # Each case sets a fault and asserts the tally, so a check that stops noticing
 # fails here rather than in somebody's install.

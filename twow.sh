@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Xapne
+# SPDX-License-Identifier: GPL-3.0-or-later
 # =============================================================================
 # TurtleWoW 1.18.1: convert the SIGGZ Windows repack to a native Linux server
 # and run it, in one command. Works on any Linux distro; every step is idempotent,
@@ -1049,6 +1051,7 @@ interactive_config() {
   ui_banner "apne's all-in-one CLI" "for TurtleWoW on Linux"
   ui_intro "server configuration"
   ui_note "Enter keeps the shown value · pick from lists with ↑/↓ + Enter · Ctrl+C quits"
+  ui_note "free software, GPL-3.0-or-later, with no warranty · terms: $0 license"
 
   if (( have_db )); then
     ui_text "Realm name (shown in the in-game realm list)" "$rname"
@@ -1760,6 +1763,31 @@ $(tail -n 15 "$SERVER/logs/realmd.out" 2>/dev/null | sed 's/^/  /')"
 }
 
 # -----------------------------------------------------------------------------
+# The notice the GPL asks an interactive program to carry, with the 'show w'
+# and 'show c' it names answered in one place. Section 5d requires none of it,
+# so it is a mode rather than a banner over every run.
+show_license() {
+  cat <<EOF
+
+${C_BOLD}twow-linux${C_RST} - the SIGGZ TurtleWoW 1.18.1 repack, native on Linux
+Copyright (C) 2026  Xapne
+
+This program comes with ${C_BOLD}ABSOLUTELY NO WARRANTY${C_RST}, to the extent permitted by
+applicable law; sections 15 and 16 of the license carry the whole of it.
+
+This is free software, and you are welcome to redistribute it under the terms
+of the GNU General Public License, version 3 or later. The full text sits in
+LICENSE beside this script, and at <https://www.gnu.org/licenses/gpl-3.0.html>.
+
+The server core is Penqle's tortoise-wow, which keeps its own GPL-2.0-or-later
+terms. The repack, the map data and the game client come from elsewhere and are
+supplied by whoever runs this.
+
+Contact: https://github.com/Xapne/twow-linux/issues or xapne@protonmail.ch
+
+EOF
+}
+
 usage() {
   cat <<EOF
 
@@ -1853,6 +1881,7 @@ ${C_BOLD}Modes:${C_RST}
                  then apply any new schema migrations.
                  ${C_DIM}Refuses while the world server is running; stop it
                  with Ctrl+C in its console first.${C_RST}
+  ${C_GREEN}license${C_RST}        this program's warranty and redistribution terms
   ${C_GREEN}help${C_RST}           this text
 
 ${C_BOLD}Files:${C_RST}
@@ -1971,6 +2000,7 @@ case "$mode" in
       --packages) dep_packages ;;
       *)          die "unknown option '$2'; deps takes --packages or nothing" ;;
     esac ;;
+  license) show_license ;;
   help|-h|--help) usage ;;
   *) warn "unknown mode '$mode'"; usage; exit 1 ;;
 esac

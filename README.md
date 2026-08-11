@@ -263,9 +263,11 @@ Never required, always appreciated.
 ## License
 
 The scripts in this repo are free software under the GNU General Public
-License, version 3 or later. `LICENSE` carries the terms.
+License, version 3 or later. `LICENSE` carries the terms, and
+`./twow.sh license` prints the same from a terminal.
 
     Copyright (C) 2026 Xapne
+    Contact: https://github.com/Xapne/twow-linux/issues or xapne@protonmail.ch
 
 The server core is Penqle's tortoise-wow, cloned at build time, and keeps the
 MaNGOS lineage's own GPL-2.0-or-later terms. The repack, the map data and the

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Xapne
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Whether the repack's broadcast is put to the reader, and what each answer
 # leaves behind. The rows belong to the dump, so the question follows them.
 # shellcheck source=tests/_assert.sh
