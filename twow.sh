@@ -55,6 +55,7 @@ REPO=https://github.com/Penqle/tortoise-wow.git
 #   3 target  what is checked, space separated; empty where the kind knows
 #   4 tier    required  missing stops the run
 #             optional  missing only costs build time
+#             seed      needed once, for the initial database seed
 #             console   missing leaves the world console in its own terminal
 #   5-8 package on debian | fedora | suse | arch; "-" where unpackaged, which
 #       skips the row on that distro
@@ -73,6 +74,7 @@ DEPS=(
   "OpenSSL headers|header|openssl/ssl.h|required|libssl-dev|openssl-devel|libopenssl-devel|openssl"
   "ZLIB headers|header|zlib.h|required|zlib1g-dev|zlib-devel|zlib-devel|zlib"
   "ACE library|ace||optional|libace-dev|-|-|-"
+  "wine|cmd|wine|seed|wine|wine|wine|wine"
   "tmux|cmd|tmux|console|tmux|tmux|tmux|tmux"
 )
 
@@ -159,8 +161,8 @@ install_binaries() {
 
 # The headers are checked alongside the commands because distros that split
 # their -dev packages pass every command check and then fail inside cmake.
-# Deferred tiers are reported up front too, since an hour of compiling before a
-# later step names what it wanted is the failure mode this prevents.
+# Deferred tiers are reported up front too: an hour of compiling before the
+# database step announces a missing wine is the failure mode this prevents.
 check_deps() {
   local row missing=() later=()
   local d_label d_kind d_target d_tier d_deb d_fed d_suse d_arch d_pkg
@@ -172,6 +174,8 @@ check_deps() {
       required) missing+=("$d_label ($d_pkg)") ;;
       optional) ace_built || later+=("no system ACE; it gets built from source here, which costs
   a few minutes on the first run. Skip that with: $INSTALL $d_pkg") ;;
+      seed)     seeded || later+=("the one-time database seed further down needs wine,
+  which is missing. Install it before then: $INSTALL $d_pkg") ;;
       console)  later+=("tmux carries the detached world console: 'run --detached' keeps the
   server up past the shell that started it, and 'console' returns to it.
   Install it with: $INSTALL $d_pkg") ;;
@@ -743,7 +747,7 @@ make_gm_account() {
 }
 
 # -----------------------------------------------------------------------------
-# native database in server/db, seeded from the repack's own files
+# native database in server/db, seeded from the bundled Windows one
 # -----------------------------------------------------------------------------
 # The daemon is started by server/1-start-mysql.sh, which is also the manual
 # path; waiting for it and vouching for the credentials belong here. Both used
@@ -814,120 +818,6 @@ assert_own_database() {
   TWOW_DB_PORT=<port> $0 ${mode:-setup}"
 }
 
-# -----------------------------------------------------------------------------
-# the one-time seed, out of the repack's own data directory
-# -----------------------------------------------------------------------------
-# The repack ships its game databases as a MariaDB data directory built on
-# Windows, which a native daemon reads directly. Opening it rewrites the redo
-# log and undo tablespaces into the running server's format, so the dump is
-# taken from a copy and the repack's own files are left as they arrived.
-SEED_SRC="mariadb-10.3.39-winx64/data"
-SEED_SRC_VERSION=10.3
-SEED_DBS=(turtle_logon turtle_char turtle_logs turtle_world)
-SEED_SOCK=""
-SEED_WORK=""
-
-# Dotted versions compared as one number, so 10.11 ranks above 10.3.
-ver_ge() {  # $1 have, $2 want
-  local a b have
-  IFS=. read -r a b _ <<<"$1"; have=$(( 10#${a:-0} * 1000 + 10#${b:-0} ))
-  IFS=. read -r a b _ <<<"$2"; (( have >= 10#${a:-0} * 1000 + 10#${b:-0} ))
-}
-
-# The seeding daemon and its copy, taken down from wherever the seed reached.
-# die exits outright, so this is reached from a trap rather than a last line.
-seed_cleanup() {
-  local i
-  if [[ -S "$SEED_SOCK" ]]; then
-    mariadb-admin --socket="$SEED_SOCK" -u root shutdown >/dev/null 2>&1 || true
-    for i in $(seq 1 30); do [[ -S "$SEED_SOCK" ]] || break; sleep 1; done
-  fi
-  [[ -n "$SEED_WORK" ]] && rm -rf "$SEED_WORK"
-  return 0
-}
-
-seed_databases() {
-  local src="$SERVER/$SEED_SRC"
-  [[ -d "$src/turtle_logon" ]] \
-    || die "the repack's database files are not in ${src#"$ROOT"/}.
-  Re-extract TurtleWoW_1.18.zip, or import dumps you already have into
-  $TWOW_DB_HOST:$TWOW_DB_PORT."
-
-  # MySQL cannot open these files at all, and a MariaDB older than the one that
-  # wrote them refuses the format.
-  local daemon ver
-  daemon=$(find_mariadbd) \
-    || die "no mariadbd found; $0 deps names the package for this system."
-  ver=$("$daemon" --version 2>/dev/null) || ver=""
-  [[ "$ver" == *MariaDB* ]] \
-    || die "the repack's databases are MariaDB $SEED_SRC_VERSION files, which MySQL cannot read.
-  Install MariaDB ($0 deps names the package), or import dumps you already have
-  into $TWOW_DB_HOST:$TWOW_DB_PORT."
-  ver=$(sed -n 's/.*Ver \([0-9][0-9.]*\).*/\1/p' <<<"$ver")
-  ver_ge "${ver:-0}" "$SEED_SRC_VERSION" \
-    || die "this MariaDB is $ver and the repack's databases are $SEED_SRC_VERSION, which it cannot
-  read. Upgrade MariaDB, or import dumps you already have into
-  $TWOW_DB_HOST:$TWOW_DB_PORT."
-
-  local mb free_mb
-  mb=$(du -sm "$src" 2>/dev/null | cut -f1) || mb=0
-  free_mb=$(df -Pm "$SERVER" 2>/dev/null | awk 'NR == 2 { print $4 }') || free_mb=0
-  if (( mb > 0 && free_mb > 0 && free_mb < mb + 200 )); then
-    die "the seed copies $mb MB out of the repack and ${SERVER#"$ROOT"/} has $free_mb MB free.
-  Free some space, then run this again."
-  fi
-
-  say "seeding databases from the repack's own data directory (one time)"
-  SEED_WORK="$SERVER/seed-db"
-  rm -rf "$SEED_WORK"
-  cp -a --reflink=auto "$src" "$SEED_WORK" \
-    || die "could not copy the repack's database files into ${SEED_WORK#"$ROOT"/}."
-  # Left behind by the machines the repack was assembled on, and naming paths
-  # that exist on none of them.
-  rm -f "$SEED_WORK"/*.pid "$SEED_WORK/my.ini"
-
-  # A socket path over 107 characters is refused several screens into the
-  # daemon's log, so a deep project directory falls back to a short one.
-  SEED_SOCK="$SEED_WORK/seed.sock"
-  (( ${#SEED_SOCK} < 100 )) || SEED_SOCK=$(mktemp -u "${TMPDIR:-/tmp}/twow-seed-XXXXXX")
-  trap seed_cleanup EXIT
-
-  # Nothing on the network and no password: the copy is read once, by this
-  # script, so the repack's own credentials are never needed.
-  "$daemon" --no-defaults --datadir="$SEED_WORK" --skip-grant-tables --skip-networking \
-    --socket="$SEED_SOCK" --pid-file="$SEED_WORK/seed.pid" --innodb-buffer-pool-size=256M \
-    > "$SERVER/logs/seed-mysql.out" 2>&1 &
-  local i; for i in $(seq 1 90); do
-    mariadb --socket="$SEED_SOCK" -u root -e "SELECT 1" >/dev/null 2>&1 && break
-    sleep 1
-  done
-  mariadb --socket="$SEED_SOCK" -u root -e "SELECT 1" >/dev/null 2>&1 \
-    || die "the repack's databases did not open. Last lines of ${SERVER#"$ROOT"/}/logs/seed-mysql.out:
-
-$(tail -n 15 "$SERVER/logs/seed-mysql.out" 2>/dev/null | sed 's/^/  /')"
-
-  # --routines is left off because mysql.proc still carries the layout the
-  # repack wrote, which a newer mariadb-dump reads as corrupt. Nothing is lost
-  # while that table is empty, which is asserted rather than assumed.
-  local routines
-  routines=$(mariadb --socket="$SEED_SOCK" -u root -N -B \
-    -e "SELECT COUNT(*) FROM mysql.proc" 2>/dev/null) || routines=""
-  [[ "$routines" == 0 ]] \
-    || die "the repack carries stored routines (mysql.proc holds ${routines:-an unreadable count}),
-  which this seed would leave behind. Report it; the dump needs a
-  mariadb-upgrade step ahead of it."
-
-  say "dumping the game databases out of the repack"
-  mariadb-dump --socket="$SEED_SOCK" -u root --triggers --databases "${SEED_DBS[@]}" \
-    > "$SERVER/logs/seed-dump.sql" \
-    || die "dumping the repack's databases failed, see ${SERVER#"$ROOT"/}/logs/seed-mysql.out"
-
-  trap - EXIT
-  seed_cleanup
-  say "importing the seed dump into native MariaDB"
-  DB < "$SERVER/logs/seed-dump.sql" || die "import of the seed dump failed"
-}
-
 ensure_database() {
   mkdir -p "$SERVER/logs"
   resolve_db_port
@@ -953,7 +843,49 @@ ensure_database() {
     say "game databases already present"; return
   fi
 
-  seed_databases
+  # Seed: dump the four preloaded DBs out of the bundled Windows MariaDB.
+  # One-time only; needs wine. The package name comes from the DEPS table so
+  # this message cannot drift away from what check_deps warns about earlier.
+  #
+  # A native daemon cannot stand in here, which is not obvious and has been
+  # tried: the repack's data directory carries a redo log that was never
+  # cleanly shut down, and only 10.4 or earlier can apply one written by 10.3,
+  # so 11.x and 12.x refuse it with "Upgrade after a crash is not supported".
+  # Skipping recovery with innodb-force-recovery=6 does start and does dump
+  # every row, but the auto-increment counters live in that log and nowhere
+  # else, and they come back as MAX(id)+1: turtle_world.creature alone drops
+  # from 9584715 to 2902648, handing new spawns guids that were used before.
+  # The bundled 10.3 mysqld is the only engine that reads the log, and wine is
+  # the only way to run it here.
+  command -v wine >/dev/null 2>&1 \
+    || die "game databases are empty and seeding them needs wine once ($INSTALL $(dep_pkg_of wine)).
+  Alternative: import dumps you already have into $TWOW_DB_HOST:$TWOW_DB_PORT."
+  local windb="$SERVER/mariadb-10.3.39-winx64"
+  [[ -d "$windb/data/turtle_logon" ]] \
+    || die "bundled Windows MariaDB data not found in $windb; cannot seed the databases."
+  # 3307 by habit, but it is only borrowed for a minute and anything may hold it.
+  local sp seedport=""
+  for sp in 3307 3313 3314 3315; do port_free "$sp" && { seedport=$sp; break; }; done
+  [[ -n "$seedport" ]] \
+    || die "no free port for the one-time seeding instance (tried 3307 and 3313-3315)."
+  say "seeding databases from the bundled Windows MariaDB (via wine, one time)"
+  ( cd "$windb/bin" && nohup wine mysqld.exe --console --port="$seedport" \
+      > "$SERVER/logs/wine-mysql.out" 2>&1 & )
+  local i; for i in $(seq 1 60); do
+    mariadb -h 127.0.0.1 -P "$seedport" -u root -p"$TWOW_SEED_PASS" --skip-ssl -e "SELECT 1" >/dev/null 2>&1 && break
+    sleep 2
+  done
+  mariadb -h 127.0.0.1 -P "$seedport" -u root -p"$TWOW_SEED_PASS" --skip-ssl -e "SELECT 1" >/dev/null 2>&1 \
+    || die "the bundled Windows MariaDB did not answer on port $seedport, see $SERVER/logs/wine-mysql.out
+  It is reached with the repack's own root password. If yours differs from the
+  default, give it as TWOW_SEED_PASS=... $0 ${mode:-setup} (TWOW_DB_PASS is this
+  server's password and is not used here)."
+  mariadb-dump -h 127.0.0.1 -P "$seedport" -u root -p"$TWOW_SEED_PASS" --skip-ssl --routines --triggers \
+    --databases turtle_logon turtle_char turtle_logs turtle_world > "$SERVER/logs/seed-dump.sql" \
+    || die "dumping from the wine MariaDB failed"
+  mariadb-admin -h 127.0.0.1 -P "$seedport" -u root -p"$TWOW_SEED_PASS" --skip-ssl shutdown || true
+  say "importing the seed dump into native MariaDB"
+  DB < "$SERVER/logs/seed-dump.sql" || die "import of the seed dump failed"
 }
 
 # -----------------------------------------------------------------------------
