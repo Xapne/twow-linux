@@ -217,7 +217,9 @@ boot_vm() {
   own=$(vm_pid_in "$WORKDIR")
   for p in "$SSH_PORT" "$REALM_PORT" "$WORLD_PORT"; do
     ss -tln | grep -q ":$p " || continue
-    holder=$( { ss -tlnp 2>/dev/null || true; } | grep ":$p " | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2)
+    # A holder ss cannot name (another user's process, a container's) leaves
+    # this empty rather than failing the boot before the die below can speak.
+    holder=$( { ss -tlnp 2>/dev/null || true; } | grep ":$p " | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2) || true
     [[ -n "$own" && "$holder" == "$own" ]] && continue
     what=""
     [[ -n "$holder" ]] && what=" by $(ps -o comm= -p "$holder" 2>/dev/null || echo process) (pid $holder)"
