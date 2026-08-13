@@ -214,6 +214,13 @@ Leaving that console does two different things, so it is worth knowing both:
 
 tmux is all `--detached` needs; plain `run` works without it.
 
+`./twow.sh service install` goes one further and makes the server part of the
+machine: a systemd user unit starts it at boot, brings back a world that dies,
+and stops everything in order at shutdown. `console` attaches the same as ever,
+starting and stopping move to `systemctl --user start|stop twow` (`stop` knows
+this and goes through it), and `./twow.sh service remove` hands starting back
+to you.
+
 More modes:
 
 - `./twow.sh logs [world|realmd|errors|db|stderr] [-f]` - last 40 lines of a

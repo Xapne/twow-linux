@@ -1163,6 +1163,9 @@ update_all() {
   [[ -d "$ROOT/src/.git" ]] || die "no source checkout in src/; run: $0 setup"
   [[ -x "$SERVER/bin/mangosd" ]] || die "not converted yet; run: $0 setup"
   if world_running; then
+    service_active && die "the world server is running as a service; stop it first:
+  systemctl --user stop twow      (start it again after: systemctl --user start twow)
+  Swapping schema under a live server is how characters get eaten."
     die "the world server is running; stop it first.
   In its console: Ctrl+C. Detached: $0 stop, or pkill -TERM -f '$WORLD_PROC'
   SIGINT is the core's restart signal; with pkill -INT the world is only restarted.
@@ -1296,6 +1299,9 @@ status_all() {
   if [[ -n "$pid" ]]; then say "world     running on $wp (pid $pid)"
   elif world_running; then say "world     starting; not accepting connections yet"
   else warn "world     not running"; fi
+  if [[ -f "$SERVICE_UNIT" ]] && command -v systemctl >/dev/null 2>&1; then
+    say "service   $(systemctl --user is-active "$SERVICE_NAME" 2>/dev/null || true), $(systemctl --user is-enabled "$SERVICE_NAME" 2>/dev/null || true) at boot"
+  fi
   return 0
 }
 
@@ -1521,6 +1527,31 @@ doctor_config() {
   fi
 }
 
+# Whether boot brings the server back, which neither status nor reach can see.
+# Speaks only once a unit is installed, since starting by hand is the default.
+doctor_service() {
+  [[ -f "$SERVICE_UNIT" ]] || return 0
+  dr_head "service"
+  local cmd
+  cmd=$(sed -n 's/^ExecStart=//p' "$SERVICE_UNIT" | head -1)
+  if [[ "$cmd" == "\"$ROOT/twow.sh\" service watch" ]]; then
+    dr_ok "the unit starts this install"
+  else
+    dr_bad "the unit starts $cmd, which is not this install" "$0 service install"
+  fi
+  if systemctl --user is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
+    dr_ok "enabled, so boot starts it"
+  else
+    dr_bad "the unit is written but not enabled, so boot passes it by" \
+      "systemctl --user enable $SERVICE_NAME"
+  fi
+  if [[ "$(loginctl show-user "$(id -un)" --property=Linger --value 2>/dev/null)" == yes ]]; then
+    dr_ok "lingering is on, so the unit starts at boot rather than at login"
+  else
+    dr_bad "lingering is off, so the unit starts only at a login" "loginctl enable-linger"
+  fi
+}
+
 doctor_all() {
   DOC_BAD=0 DOC_NOTE=0
   doctor_install
@@ -1528,6 +1559,7 @@ doctor_all() {
   doctor_dump
   doctor_reach
   doctor_config
+  doctor_service
   printf '\n'
   if (( DOC_BAD )); then
     printf '%s%d problem(s)%s, %d note(s)\n' "$C_RED" "$DOC_BAD" "$C_RST" "$DOC_NOTE"
@@ -1617,6 +1649,12 @@ reset_all() {  # $1 the --yes flag as given
   confirm_destructive "src/, build/, deps/ and the converted server/ go, which is
   every part setup generated. client/ and the archives beside it stay, and
   setup builds the rest again from them." "${1:-}" || return 0
+  # Stopped through systemd first, or the service starts the server back up
+  # while its files are being removed.
+  if service_active; then
+    say "the service holds the server up; stopping it there first"
+    systemctl --user stop "$SERVICE_NAME" 2>/dev/null || true
+  fi
   stop_all
   for d in src build deps; do
     [[ -d "$ROOT/$d" ]] || continue
@@ -1713,7 +1751,12 @@ console_attach() {
   # stops the server, so both ways out are spelled out before attaching.
   say "attaching to the world console; the mangos> prompt is the server's own"
   say "leave it running:  your tmux prefix (Ctrl+B by default), then d"
-  say "stop the server:   Ctrl+C, or 'server shutdown 1' at the prompt"
+  if service_active; then
+    say "stop the server:   systemctl --user stop twow; the service brings back
+                   what ends any other way, Ctrl+C included"
+  else
+    say "stop the server:   Ctrl+C, or 'server shutdown 1' at the prompt"
+  fi
   exec tmux ${socket[@]+"${socket[@]}"} attach -t "=$CONSOLE_SESSION"
 }
 
@@ -1753,6 +1796,11 @@ wait_for_world() {
 }
 
 run_all() {
+  # A server systemd owns is started and stopped there, or the unit and the
+  # ports disagree about who runs it. The service's own watcher passes by.
+  [[ -n "${TWOW_SERVICE:-}" ]] || ! service_active \
+    || die "the server runs as a service, and systemd is holding it up.
+  Attach with: $0 console      stop with: systemctl --user stop twow"
   [[ -x "$SERVER/bin/mangosd" ]] || die "no native binaries yet; run: $0 setup"
   # 3-world-server.sh takes at most a log level, which is whatever is left once
   # the flag is taken out.
@@ -1811,6 +1859,125 @@ $(tail -n 15 "$SERVER/logs/realmd.out" 2>/dev/null | sed 's/^/  /')"
   warn "world server stopped; realmd and MariaDB are still running.
   Stop them with: $0 stop     (or $0 status to see what is up)"
   return $rc
+}
+
+# -----------------------------------------------------------------------------
+# service: the server at boot, as a systemd user unit
+# -----------------------------------------------------------------------------
+# A user unit rather than a system one, so everything keeps running as whoever
+# converted the install and root owns none of it. Lingering keeps that user's
+# manager alive outside logins, which is what makes "at boot" true.
+SERVICE_NAME=twow.service
+SERVICE_UNIT="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$SERVICE_NAME"
+
+# Whether the unit is holding the server up now. Quiet wherever systemd is
+# absent, which is what a container answers.
+service_active() {
+  command -v systemctl >/dev/null 2>&1 || return 1
+  [[ -f "$SERVICE_UNIT" ]] || return 1
+  systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null
+}
+
+# The unit, written whole on every install so a moved checkout heals itself.
+# KillMode=mixed hands TERM to the watcher alone, whose trap stops world,
+# realmd and database in that order; the final SIGKILL meets an empty group.
+service_unit_text() {
+  cat <<EOF
+# Written by 'twow.sh service install', and rewritten whole by the next one.
+[Unit]
+Description=TurtleWoW server (twow-linux)
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=exec
+ExecStart="$ROOT/twow.sh" service watch
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=180
+KillMode=mixed
+
+[Install]
+WantedBy=default.target
+EOF
+}
+
+# What ExecStart runs: the same shape as docker/entrypoint.sh. The stack comes
+# up detached, then this holds on the console session, which outlives a crashed
+# world where the process alone flaps.
+service_watch() {
+  local stopped=0
+  TWOW_SERVICE=1
+  run_all --detached
+  trap 'stopped=1; stop_all || true' TERM INT
+  while console_running; do sleep 5 & wait $! || true; done
+  (( stopped )) && exit 0
+  die "the world console ended on its own; systemd tries again in 30s. What it
+  last said: $0 logs world"
+}
+
+service_install() {
+  command -v systemctl >/dev/null 2>&1 || die "no systemctl here; starting at boot needs systemd"
+  systemctl --user show-environment >/dev/null 2>&1 \
+    || die "systemd runs no user manager for this login, so a user unit has
+  nowhere to go. Containers manage the server their own way (docker/README.md)."
+  [[ -x "$SERVER/bin/mangosd" ]] || die "nothing to start at boot yet; run: $0 setup"
+  command -v tmux >/dev/null 2>&1 \
+    || die "the service keeps the world console in tmux, which is missing; install it first"
+  mkdir -p "${SERVICE_UNIT%/*}"
+  service_unit_text > "$SERVICE_UNIT"
+  systemctl --user daemon-reload
+  say "wrote ~/.config/systemd/user/$SERVICE_NAME"
+  # Without lingering a user manager lives only inside logins, and the unit
+  # would start at login rather than at boot.
+  if [[ "$(loginctl show-user "$(id -un)" --property=Linger --value 2>/dev/null)" != yes ]]; then
+    if loginctl enable-linger 2>/dev/null; then
+      say "lingering enabled: this user's services start at boot and outlive logouts"
+    else
+      warn "lingering was refused, so the service starts at login rather than at boot.
+  Grant it with: sudo loginctl enable-linger $(id -un)"
+    fi
+  fi
+  # A server started by hand holds the ports the unit needs. It moves under the
+  # service the way a pre-socket console moves: stopped, then started fresh.
+  if world_running || realm_running || { [[ -d "$SERVER/db/mysql" ]] && mariadb_running; }; then
+    say "moving the running server under the service"
+    stop_all
+  fi
+  systemctl --user enable --now "$SERVICE_NAME" >/dev/null 2>&1 \
+    || die "the unit was written but did not start. What systemd says:
+  systemctl --user status twow      journalctl --user -u twow"
+  say "the server now starts at boot, and is coming up"
+  say "watch it:  systemctl --user status twow      $0 console"
+  say "stop it:   systemctl --user stop twow        ($0 stop does the same while installed)"
+}
+
+service_remove() {
+  [[ -f "$SERVICE_UNIT" ]] || { say "no service is installed"; return 0; }
+  # disable --now stops through the watcher's trap, so the shutdown is ordered.
+  systemctl --user disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
+  rm -f "$SERVICE_UNIT"
+  systemctl --user daemon-reload 2>/dev/null || true
+  say "service removed: the server is stopped, and starts by hand again ($0 run)"
+  say "lingering stays as it was; retire it with: loginctl disable-linger"
+}
+
+service_status() {
+  if [[ ! -f "$SERVICE_UNIT" ]]; then
+    say "no service is installed; '$0 service install' starts the server at boot"
+    return 0
+  fi
+  local ac en lg
+  ac=$(systemctl --user is-active "$SERVICE_NAME" 2>/dev/null) || true
+  en=$(systemctl --user is-enabled "$SERVICE_NAME" 2>/dev/null) || true
+  lg=$(loginctl show-user "$(id -un)" --property=Linger --value 2>/dev/null) || true
+  say "unit      ~/.config/systemd/user/$SERVICE_NAME"
+  say "state     ${ac:-unknown}, ${en:-unknown} at boot"
+  if [[ "$lg" == yes ]]; then
+    say "linger    on: starts at boot and outlives logouts"
+  else
+    warn "linger    off: starts only at a login ($0 service install grants it)"
+  fi
 }
 
 # -----------------------------------------------------------------------------
@@ -1912,6 +2079,12 @@ ${C_BOLD}Modes:${C_RST}
                  ${C_DIM}Exits non-zero when something is wrong, so it scripts.${C_RST}
   ${C_GREEN}stop${C_RST}           stop the world, then realmd, then the database, in that
                  order; safe to run when some of them are already down
+  ${C_GREEN}service${C_RST} [install | remove | status]
+                 start the server at boot: install writes a systemd user unit,
+                 grants this user lingering and starts it; remove undoes both
+                 the unit and the running server; status says where it stands.
+                 ${C_DIM}While installed, systemd keeps the server up: a crashed
+                 world comes back, and 'stop' goes through systemctl.${C_RST}
   ${C_GREEN}reset${C_RST} --world | --all [--yes]
                  --world empties the realm: every account, character and pet
                  goes, and the build, the world database and the client stay.
@@ -2023,7 +2196,25 @@ case "$mode" in
   doctor)  doctor_all ;;
   console) console_attach ;;
   logs)    show_logs "${2:-world}" "${3:-}" ;;
-  stop)    stop_all ;;
+  # Stopped through systemd while it owns the server, or the watcher reads the
+  # stop as a crash and starts everything back up.
+  stop)
+    if service_active; then
+      say "the server runs as a service; stopping it there, or it comes right back"
+      exec systemctl --user stop "$SERVICE_NAME"
+    fi
+    stop_all ;;
+  service)
+    case "${2:-status}" in
+      install) service_install ;;
+      remove)  service_remove ;;
+      status)  service_status ;;
+      watch)   service_watch ;;
+      *) die "usage: $0 service [install | remove | status]
+  install  write and enable a systemd user unit, so the server starts at boot
+  remove   stop the server and take the unit away
+  status   whether one is installed, enabled, and running" ;;
+    esac ;;
   reset)
     check_deps; resolve_db_port
     case "${2:-}" in
