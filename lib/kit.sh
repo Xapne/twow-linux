@@ -136,8 +136,16 @@ realm_running() { [[ -n "$(server_pids realmd)" ]]; }
 
 # The terminal a detached world console keeps. Named here rather than in twow.sh
 # because the container's entrypoint watches the same session.
+# A socket of the kit's own keeps the console off any tmux server the user
+# runs, where stopping either would take the other's sessions with it. The "="
+# matches the name exactly; -t alone takes any session it prefixes.
 CONSOLE_SESSION=twow
-console_running() { command -v tmux >/dev/null 2>&1 && tmux has-session -t "$CONSOLE_SESSION" 2>/dev/null; }
+CONSOLE_SOCKET=twow
+console_running() { command -v tmux >/dev/null 2>&1 && tmux -L "$CONSOLE_SOCKET" has-session -t "=$CONSOLE_SESSION" 2>/dev/null; }
+# A console started before the kit had its own socket sits on tmux's default
+# one. A session cannot move between tmux servers, so only a stop and a fresh
+# detached start bring it over.
+legacy_console_running() { command -v tmux >/dev/null 2>&1 && tmux has-session -t "=$CONSOLE_SESSION" 2>/dev/null; }
 
 # Whether the world takes clients. The core opens this port once every map and
 # table is loaded (StartNetwork follows SetInitialWorldSettings in

@@ -1441,6 +1441,12 @@ doctor_reach() {
   else
     dr_skip "the world server is down, so logins are left out ($0 status)"
   fi
+  # A session cannot move between tmux servers, so only a restart brings a
+  # pre-socket console over to the kit's own.
+  if world_running && ! console_running && legacy_console_running; then
+    dr_note "the world console is on tmux's default socket, from an earlier kit; a
+        restart moves it ($0 stop, then $0 run --detached)"
+  fi
 
   rbind=$(conf_get "$R" BindIP); mbind=$(conf_get "$M" BindIP)
   if [[ "$rbind" != "$mbind" ]]; then
@@ -1688,17 +1694,27 @@ console_attach() {
   command -v tmux >/dev/null 2>&1 \
     || die "tmux is not installed, and the detached console is a tmux session.
   Install it, or start the world in this terminal with: $0 run"
-  if console_running; then
-    # Ctrl+C is the reflex for leaving a terminal and is the one thing that
-    # stops the server, so both ways out are spelled out before attaching.
-    say "attaching to the world console; the mangos> prompt is the server's own"
-    say "leave it running:  your tmux prefix (Ctrl+B by default), then d"
-    say "stop the server:   Ctrl+C, or 'server shutdown 1' at the prompt"
-    exec tmux attach -t "$CONSOLE_SESSION"
-  fi
-  world_running && die "the world server is running without a console session,
+  # A console from an earlier kit sits on tmux's default socket, where it still
+  # works; attaching goes to it there. It is only taken for the console while
+  # the world runs, since an exact-named session alone may be anyone's.
+  local socket=(-L "$CONSOLE_SOCKET")
+  if ! console_running; then
+    if legacy_console_running && world_running; then
+      socket=()
+      say "this console predates the kit's own tmux socket; move it there when
+  convenient with: $0 stop, then $0 run --detached"
+    else
+      world_running && die "the world server is running without a console session,
   so it was started in a terminal of its own; that terminal is its console."
-  die "no world server is running. Start one with: $0 run --detached"
+      die "no world server is running. Start one with: $0 run --detached"
+    fi
+  fi
+  # Ctrl+C is the reflex for leaving a terminal and is the one thing that
+  # stops the server, so both ways out are spelled out before attaching.
+  say "attaching to the world console; the mangos> prompt is the server's own"
+  say "leave it running:  your tmux prefix (Ctrl+B by default), then d"
+  say "stop the server:   Ctrl+C, or 'server shutdown 1' at the prompt"
+  exec tmux ${socket[@]+"${socket[@]}"} attach -t "=$CONSOLE_SESSION"
 }
 
 # How long a detached start watches before it leaves the world to load on its
@@ -1771,7 +1787,12 @@ $(tail -n 15 "$SERVER/logs/realmd.out" 2>/dev/null | sed 's/^/  /')"
       || die "--detached keeps the world console in a tmux session, and tmux is not installed.
   Install it, or start the world in this terminal with: $0 run"
     console_running && die "a world console is already running: $0 console"
-    tmux new-session -d -s "$CONSOLE_SESSION" -c "$SERVER" "./3-world-server.sh $level"
+    # A world still held by a pre-socket console cannot be joined by a second
+    # one; a stop closes that session with the server it holds.
+    legacy_console_running && world_running \
+      && die "a world console from an earlier kit is still running on tmux's default
+  socket. Move it to the kit's own: $0 stop, then $0 run --detached"
+    tmux -L "$CONSOLE_SOCKET" new-session -d -s "$CONSOLE_SESSION" -c "$SERVER" "./3-world-server.sh $level"
     # tmux reports success the moment the session exists, so a world that
     # refuses to start looks the same as one that came up, and one still loading
     # looks like one taking clients. Both are settled by watching.

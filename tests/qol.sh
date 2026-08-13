@@ -54,13 +54,17 @@ expect "a stamped log resolves to the newest" \
 # Everything run_all touches is replaced, and tmux is a stub on PATH that
 # records how it was called.
 mkdir -p "$TMP/bin" "$TMP/server/bin"
-# The stub records how it was called, and answers has-session the way tmux
-# would: no session before new-session, one after.
+# The stub records how it was called with the socket in front, and answers
+# has-session per socket the way tmux would: a session exists after new-session
+# on that socket, or when a marker file seeds one there.
 cat > "$TMP/bin/tmux" <<'STUB'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >> "$TMPFILE"
+sock=default
+if [ "$1" = -L ]; then sock=$2; shift 2; fi
+printf '%s %s\n' "$sock" "$*" >> "$TMPFILE"
 if [ "$1" = has-session ]; then
-  grep -q new-session "$TMPFILE" && exit 0
+  grep -q "^$sock new-session" "$TMPFILE" && exit 0
+  [ -e "$TMPFILE.$sock" ] && exit 0
   exit 1
 fi
 exit 0
@@ -80,14 +84,42 @@ say()               { :; }
 warn()              { :; }
 
 : > "$TMPFILE"; run_all --detached 2 >/dev/null 2>&1
-expect "a detached run starts the session named twow" \
-  "$(grep -c "new-session -d -s twow" "$TMPFILE")" 1
+expect "a detached run starts the session named twow on the kit's socket" \
+  "$(grep -c "^twow new-session -d -s twow" "$TMPFILE")" 1
 expect "the log level reaches the world script" \
   "$(grep -c '3-world-server.sh 2' "$TMPFILE")" 1
 
 : > "$TMPFILE"; run_all -d >/dev/null 2>&1
 expect "the short flag works and leaves no level behind" \
   "$(grep -c '3-world-server.sh $' "$TMPFILE")" 1
+
+# --- a console from before the kit had its own socket ------------------------
+# It cannot move between tmux servers, so a detached start yields to it and
+# console goes to it where it is. The marker seeds it on the default socket.
+: > "$TMPFILE"; : > "$TMPFILE.default"
+if ( world_running() { return 0; }; run_all --detached ) >/dev/null 2>&1
+then rc=0; else rc=1; fi
+expect "a detached start yields to a pre-socket console" "$rc" 1
+expect "and starts nothing beside it" "$(grep -c new-session "$TMPFILE")" 0
+
+: > "$TMPFILE"
+( world_running() { return 0; }; console_attach ) >/dev/null 2>&1
+expect "console follows a pre-socket console to the default socket" \
+  "$(grep -c '^default attach -t =twow' "$TMPFILE")" 1
+
+# The same name on the default socket may be anyone's session; with no world
+# running it is left alone.
+: > "$TMPFILE"
+if ( world_running() { return 1; }; console_attach ) >/dev/null 2>&1
+then rc=0; else rc=1; fi
+expect "a twow session that is not a console is not attached to" "$rc" 1
+rm -f "$TMPFILE.default"
+
+: > "$TMPFILE"; : > "$TMPFILE.twow"
+( console_attach ) >/dev/null 2>&1
+expect "console attaches on the kit's socket, to the exact name" \
+  "$(grep -c '^twow attach -t =twow' "$TMPFILE")" 1
+rm -f "$TMPFILE.twow"
 
 # --- a destructive step is agreed to first -----------------------------------
 # The asking path needs a terminal, which a test run does not have. What is
