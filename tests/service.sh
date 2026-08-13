@@ -26,15 +26,19 @@ case "$unit" in *"KillMode=none"*) rc=1;; *) rc=0;; esac
 expect "KillMode=none is not used" "$rc" 0
 
 # --- run yields to an active service -----------------------------------------
-refused=$( ( service_active() { return 0; }; run_all ) 2>&1 ) || true
+# SERVER points at an empty directory in both: past the guard, run_all must
+# die on the missing binaries rather than reach a converted install's server.
+refused=$( ( service_active() { return 0; }; SERVER="$TMP"; run_all ) 2>&1 ) || true
 case "$refused" in *"runs as a service"*) rc=0;; *) rc=1;; esac
 expect "run refuses while systemd holds the server" "$rc" 0
 
-# The watcher is the one caller allowed through; it fails later on the missing
-# binaries here, which proves it got past the guard.
-passed=$( ( service_active() { return 0; }; TWOW_SERVICE=1; run_all ) 2>&1 ) || true
+# The watcher is the one caller allowed through; dying on the binaries instead
+# is what proves it got past the guard.
+passed=$( ( service_active() { return 0; }; SERVER="$TMP"; TWOW_SERVICE=1; run_all ) 2>&1 ) || true
 case "$passed" in *"runs as a service"*) rc=1;; *) rc=0;; esac
 expect "the service's own watcher passes the guard" "$rc" 0
+case "$passed" in *"no native binaries"*) rc=0;; *) rc=1;; esac
+expect "and stops at the binary check, starting nothing" "$rc" 0
 
 # --- doctor reads the unit back ----------------------------------------------
 # systemctl and loginctl answer nothing here, so only the ExecStart check can
