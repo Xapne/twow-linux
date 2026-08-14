@@ -47,10 +47,11 @@ MARKER=vm.id
 REGISTRY="${XDG_STATE_HOME:-$HOME/.local/state}/twow-vm/workdirs"
 
 # --- looks and prompts: shared with twow.sh, see lib/ui.sh ----------
+# readlink follows a symlinked invocation back to the checkout that holds lib/.
 # shellcheck source=lib/ui.sh
-. "$(dirname "${BASH_SOURCE[0]}")/lib/ui.sh"
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/ui.sh"
 # shellcheck source=lib/firewall.sh
-. "$(dirname "${BASH_SOURCE[0]}")/lib/firewall.sh"
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/firewall.sh"
 
 # Log helpers stay here: twow.sh prints "[setup]" lines that convert()
 # parses for the progress bar, so the two scripts speak differently on purpose.

@@ -18,7 +18,9 @@
 # =============================================================================
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# readlink follows a symlinked invocation, such as /usr/local/bin/twow, back
+# to the checkout that holds lib/ and server/.
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 SERVER="$ROOT/server"
 # shellcheck source=lib/ui.sh
 . "$ROOT/lib/ui.sh"

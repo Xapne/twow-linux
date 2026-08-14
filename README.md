@@ -221,6 +221,10 @@ starting and stopping move to `systemctl --user start|stop twow` (`stop` knows
 this and goes through it), and `./twow.sh service remove` hands starting back
 to you.
 
+`twow.sh` follows a symlink back to its checkout, so
+`ln -s /srv/twow/twow.sh /usr/local/bin/twow` makes the kit a `twow` command
+from anywhere.
+
 More modes:
 
 - `./twow.sh logs [world|realmd|errors|db|stderr] [-f]` - last 40 lines of a
