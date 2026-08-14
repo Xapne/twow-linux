@@ -1534,6 +1534,14 @@ doctor_config() {
 doctor_service() {
   [[ -f "$SERVICE_UNIT" ]] || return 0
   dr_head "service"
+  # Without a manager the checks below read nothing and every one of them would
+  # report a fault the unit does not have, so this is the whole section.
+  if ! systemctl --user show-environment >/dev/null 2>&1; then
+    dr_bad "this login runs no user manager, so nothing here can start the unit.
+  $(user_manager_hint)" \
+      "log in over ssh as $(id -un), and run: $0 doctor"
+    return 0
+  fi
   local cmd
   cmd=$(sed -n 's/^ExecStart=//p' "$SERVICE_UNIT" | head -1)
   if [[ "$cmd" == "\"$ROOT/twow.sh\" service watch" ]]; then
@@ -1893,6 +1901,16 @@ $(tail -n 15 "$SERVER/logs/realmd.out" 2>/dev/null | sed 's/^/  /')"
 SERVICE_NAME=twow.service
 SERVICE_UNIT="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$SERVICE_NAME"
 
+# Which logins carry no user manager, named once for the install refusal and
+# the doctor finding alike. A manager comes with a login session, which su and
+# sudo shells, 'pct enter' and a container's web console never open.
+user_manager_hint() {
+  printf '%s' "su and sudo shells, 'pct enter' and a container's web console open
+  no login session, and a minimal container wants dbus and libpam-systemd before
+  it can. On WSL, systemd turns on in /etc/wsl.conf; containers from docker/
+  manage the server their own way (docker/README.md)."
+}
+
 # Whether a unit is installed for this login, and whether it is holding the
 # server up now. Both quiet wherever systemd is absent, which is what a
 # container answers.
@@ -1946,7 +1964,8 @@ service_install() {
   command -v systemctl >/dev/null 2>&1 || die "no systemctl here; starting at boot needs systemd"
   systemctl --user show-environment >/dev/null 2>&1 \
     || die "systemd runs no user manager for this login, so a user unit has
-  nowhere to go. Containers manage the server their own way (docker/README.md)."
+  nowhere to go. $(user_manager_hint)
+  A plain ssh login as $(id -un) brings one, and this runs from there."
   [[ -x "$SERVER/bin/mangosd" ]] || die "nothing to start at boot yet; run: $0 setup"
   command -v tmux >/dev/null 2>&1 \
     || die "the service keeps the world console in tmux, which is missing; install it first"

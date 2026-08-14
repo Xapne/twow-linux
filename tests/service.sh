@@ -63,12 +63,16 @@ expect "a log level is named as not applying under the service" "$rc" 0
 expect "run returns clean once the service brings the world up" "$rc" 0
 
 # --- doctor reads the unit back ----------------------------------------------
-# systemctl and loginctl answer nothing here, so only the ExecStart check can
-# come out ok; what is asserted is that check alone.
+# A stub that answers show-environment and nothing else: the manager is there,
+# so only the ExecStart check can come out ok, and that check alone is asserted.
 mkdir -p "$TMP/bin"
-for c in systemctl loginctl; do
-  printf '#!/bin/sh\nexit 1\n' > "$TMP/bin/$c"; chmod +x "$TMP/bin/$c"
-done
+cat > "$TMP/bin/systemctl" <<'STUB'
+#!/bin/sh
+[ "$2" = show-environment ] && exit 0
+exit 1
+STUB
+printf '#!/bin/sh\nexit 1\n' > "$TMP/bin/loginctl"
+chmod +x "$TMP/bin/systemctl" "$TMP/bin/loginctl"
 export PATH="$TMP/bin:$PATH"
 
 SERVICE_UNIT="$TMP/twow.service"
@@ -81,6 +85,19 @@ printf 'ExecStart="/somewhere/else/twow.sh" service watch\n' > "$SERVICE_UNIT"
 verdict=$(doctor_service 2>&1)
 case "$verdict" in *"not this install"*) rc=0;; *) rc=1;; esac
 expect "doctor names a unit that starts another install" "$rc" 0
+
+# A login without a manager is the one finding worth reporting: the checks
+# above would each blame the unit for what the login is missing.
+service_unit_text > "$SERVICE_UNIT"
+verdict=$( ( systemctl() { return 1; }; doctor_service ) 2>&1 )
+case "$verdict" in *"no user manager"*) rc=0;; *) rc=1;; esac
+expect "doctor names a login that runs no user manager" "$rc" 0
+case "$verdict" in *"ExecStart"*|*"lingering"*) rc=1;; *) rc=0;; esac
+expect "and stops there rather than blaming the unit" "$rc" 0
+case "$verdict" in *"pct enter"*) rc=0;; *) rc=1;; esac
+expect "and names the shells that open no session" "$rc" 0
+case "$verdict" in *"log in over ssh"*) rc=0;; *) rc=1;; esac
+expect "and the login that brings one" "$rc" 0
 
 rm -f "$SERVICE_UNIT"
 expect "doctor is silent while no unit is installed" "$(doctor_service 2>&1)" ""
