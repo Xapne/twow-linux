@@ -217,9 +217,9 @@ tmux is all `--detached` needs; plain `run` works without it.
 `./twow.sh service install` goes one further and makes the server part of the
 machine: a systemd user unit starts it at boot, brings back a world that dies,
 and stops everything in order at shutdown. `console` attaches the same as ever,
-starting and stopping move to `systemctl --user start|stop twow` (`stop` knows
-this and goes through it), and `./twow.sh service remove` hands starting back
-to you.
+starting and stopping move to `systemctl --user start|stop twow` (`run` and
+`stop` know this and go through it), and `./twow.sh service remove` hands
+starting back to you.
 
 `twow.sh` follows a symlink back to its checkout, so
 `ln -s /srv/twow/twow.sh /usr/local/bin/twow` makes the kit a `twow` command

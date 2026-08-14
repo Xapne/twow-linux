@@ -1799,10 +1799,31 @@ wait_for_world() {
 
 run_all() {
   # A server systemd owns is started and stopped there, or the unit and the
-  # ports disagree about who runs it. The service's own watcher passes by.
-  [[ -n "${TWOW_SERVICE:-}" ]] || ! service_active \
-    || die "the server runs as a service, and systemd is holding it up.
-  Attach with: $0 console      stop with: systemctl --user stop twow"
+  # ports disagree about who runs it. Handing an idle unit to systemctl keeps
+  # stop-then-run one owner; the service's own watcher passes by.
+  if [[ -z "${TWOW_SERVICE:-}" ]] && service_installed; then
+    service_active && die "the server runs as a service, and systemd is holding it up.
+  Attach with: $0 console      stop with: $0 stop"
+    local a; for a in "$@"; do case "$a" in
+      -d|--detached) ;;
+      *) warn "the service starts the world its own way; '$a' does not apply" ;;
+    esac; done
+    say "the server runs as a service; starting it there"
+    systemctl --user start "$SERVICE_NAME" \
+      || die "the service did not start. What systemd says:
+  systemctl --user status twow      journalctl --user -u twow"
+    # The watcher brings the stack up in order, and the console session is the
+    # first sign of it; wait_for_world reads the rest.
+    local i; for i in $(seq 1 30); do
+      console_running && break
+      service_active || break
+      sleep 1
+    done
+    console_running || die "the world console has not appeared. What systemd says:
+  journalctl --user -u twow"
+    wait_for_world || die "the service tries again in 30s. What it last said: $0 logs world"
+    return 0
+  fi
   [[ -x "$SERVER/bin/mangosd" ]] || die "no native binaries yet; run: $0 setup"
   # 3-world-server.sh takes at most a log level, which is whatever is left once
   # the flag is taken out.
@@ -1872,11 +1893,14 @@ $(tail -n 15 "$SERVER/logs/realmd.out" 2>/dev/null | sed 's/^/  /')"
 SERVICE_NAME=twow.service
 SERVICE_UNIT="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$SERVICE_NAME"
 
-# Whether the unit is holding the server up now. Quiet wherever systemd is
-# absent, which is what a container answers.
+# Whether a unit is installed for this login, and whether it is holding the
+# server up now. Both quiet wherever systemd is absent, which is what a
+# container answers.
+service_installed() {
+  command -v systemctl >/dev/null 2>&1 && [[ -f "$SERVICE_UNIT" ]]
+}
 service_active() {
-  command -v systemctl >/dev/null 2>&1 || return 1
-  [[ -f "$SERVICE_UNIT" ]] || return 1
+  service_installed || return 1
   systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null
 }
 
@@ -1951,7 +1975,7 @@ service_install() {
   systemctl --user status twow      journalctl --user -u twow"
   say "the server now starts at boot, and is coming up"
   say "watch it:  systemctl --user status twow      $0 console"
-  say "stop it:   systemctl --user stop twow        ($0 stop does the same while installed)"
+  say "stop it:   $0 stop      start it:  $0 run      (both go through systemctl while installed)"
 }
 
 service_remove() {
@@ -2086,7 +2110,7 @@ ${C_BOLD}Modes:${C_RST}
                  grants this user lingering and starts it; remove undoes both
                  the unit and the running server; status says where it stands.
                  ${C_DIM}While installed, systemd keeps the server up: a crashed
-                 world comes back, and 'stop' goes through systemctl.${C_RST}
+                 world comes back, and 'run' and 'stop' go through systemctl.${C_RST}
   ${C_GREEN}reset${C_RST} --world | --all [--yes]
                  --world empties the realm: every account, character and pet
                  goes, and the build, the world database and the client stay.
