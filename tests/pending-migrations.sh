@@ -69,6 +69,39 @@ expect "one real error among them is still a failure" "$got" no
 only_already_there "$TMP/err" && got=yes || got=no
 expect "output with no error at all is not this case" "$got" no
 
+# -- the tables the core ships ------------------------------------------------
+# sql/base holds one file per table, each opening with DROP TABLE. A table the
+# database already has is left alone whatever the file would rebuild it as, and
+# one it has never had is taken from there.
+mkdir -p "$TMP/base-src/sql/base"
+: > "$TMP/base-src/sql/base/tw_world_creature_template.sql"
+: > "$TMP/base-src/sql/base/tw_world_itemextendedcost.sql"
+: > "$TMP/base-src/sql/base/tw_char_characters.sql"
+: > "$TMP/base-src/sql/base/notes.sql"
+SRC="$TMP/base-src"
+# What each database holds, in place of the client's answer to SHOW TABLES.
+DB() {
+  case "$*" in
+    *turtle_world*) printf '%s\n' creature_template playerbot ;;
+    *turtle_char*)  printf '%s\n' characters ;;
+  esac
+}
+: > "$TMP/applied"
+expect "a table the database already has is not rebuilt" \
+  "$(base_missing "$TMP/applied" | grep -c creature_template || true)" 0
+expect "one it has never had is taken from the core's own dump" \
+  "$(base_missing "$TMP/applied" | grep -c tw_world_itemextendedcost || true)" 1
+expect "each is named with the database it belongs to" \
+  "$(base_missing "$TMP/applied" | grep itemextendedcost | cut -d'|' -f1)" turtle_world
+expect "a file naming no database is left where it is" \
+  "$(base_missing "$TMP/applied" | grep -c notes || true)" 0
+expect "the character database is asked about its own" \
+  "$(base_missing "$TMP/applied" | grep -c tw_char_characters || true)" 0
+printf '%s\n' tw_world_itemextendedcost > "$TMP/applied"
+expect "and one already recorded is not offered twice" \
+  "$(base_missing "$TMP/applied" | wc -l)" 0
+unset -f DB
+
 # -- what runs before what ----------------------------------------------------
 # Two streams reach the same database and their stamps interleave: the core's
 # own history adds a column and a fix on top of it names that column, so the

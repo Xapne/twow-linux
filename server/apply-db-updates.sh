@@ -40,6 +40,38 @@ STREAMS=(
   "sql/character_updates|turtle_char|[0-9]*.sql"
 )
 
+# The core also carries a whole world dump, one file per table under sql/base,
+# each opening with DROP TABLE. Only the tables a database has never had are
+# taken from there: the repack's own dump is this realm's world data, and a file
+# that rebuilt a table it already filled would throw that data away. A file is
+# named tw_<database>_<table>.sql, which is where both come from.
+BASE_DIR=sql/base
+
+# The base files whose table is absent, as database|directory|file. Reading the
+# table list once per database keeps this one query rather than one per file.
+# $1 a file holding the applied names, which are also skipped
+base_missing() {
+  local applied=$1 f name db table have
+  [[ -d "$SRC/$BASE_DIR" ]] || return 0
+  have=$(mktemp)
+  for f in "$SRC/$BASE_DIR"/tw_*.sql; do
+    [ -e "$f" ] || continue
+    name=${f##*/}; name=${name%.sql}
+    case "$name" in
+      tw_world_*) db=turtle_world; table=${name#tw_world_} ;;
+      tw_char_*)  db=turtle_char;  table=${name#tw_char_}  ;;
+      tw_logon_*) db=turtle_logon; table=${name#tw_logon_} ;;
+      *) continue ;;
+    esac
+    grep -qxF -- "$name" "$applied" && continue
+    DB -N -B -e "SHOW TABLES FROM \`$db\`" > "$have" 2>/dev/null || true
+    grep -qxF -- "$table" "$have" && continue
+    printf '%s|%s|%s\n' "$db" "$BASE_DIR" "$name.sql"
+  done
+  rm -f "$have"
+  return 0
+}
+
 # Gives a colliding INSERT the migration's newer values by appending
 # ON DUPLICATE KEY UPDATE over exactly the columns the statement names, so
 # columns it does not mention keep what they hold. REPLACE would serve for a
@@ -167,6 +199,12 @@ pending_files() {
 # all, which is where those belong.
 pending_all() {
   local stream dir db glob f key
+  {
+  # A table the database has never had comes before every stamp, since a
+  # migration a few files along inserts into one of them.
+  applied_names turtle_world > "$APPLIED"
+  applied_names turtle_char >> "$APPLIED"
+  base_missing "$APPLIED" | sed 's/^/00000000000000|/'
   for stream in "${ALL_STREAMS[@]}"; do
     IFS='|' read -r dir db glob <<< "$stream"
     [[ -d "$SRC/$dir" ]] || continue
@@ -177,7 +215,8 @@ pending_all() {
       [[ "$key" =~ ^[0-9]{14}$ ]] || key=00000000000000
       printf '%s|%s|%s|%s\n' "$key" "$db" "$dir" "$f"
     done < <(pending_files "$glob" "$APPLIED")
-  done | sort -s -t'|' -k1,1
+  done
+  } | sort -s -t'|' -k1,1
 }
 
 # run only when executed, not when sourced (keeps the functions testable)

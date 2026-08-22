@@ -51,7 +51,7 @@ expect "and its trees move with it" "$(variant_src)" "$ROOT/src/bots"
 expect "the environment overrides the record" "$(TWOW_VARIANT=stock variant_active)" stock
 expect "a label no table knows falls back to stock" "$(TWOW_VARIANT=eggs variant_active)" stock
 
-expect "the bots core seeds streams of its own" "$(variant_streams | wc -l)" 4
+expect "the bots core seeds streams of its own" "$(variant_streams | wc -l)" 3
 expect "the stock core seeds none" "$(TWOW_VARIANT=stock variant_streams | wc -l)" 0
 expect "a seeded stream is applied against the world or the characters" \
   "$(variant_streams | cut -d'|' -f2 | sort -u | grep -cv '^turtle_\(world\|char\)$')" 0

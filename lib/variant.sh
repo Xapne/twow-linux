@@ -34,7 +34,9 @@ VARIANTS=(
 )
 
 # Tables a core seeds once and then owns, as
-# variant|directory under the source|database|glob.
+# variant|directory under the source|database|glob. What the core ships for
+# both, in sql/base, is the applier's own business: it takes a table from there
+# when the database has never had one.
 # These carry DROP TABLE at the top, so they are seeded once and never again;
 # the applier records them by name, which is what makes that true. They are
 # applied before the stamped migrations, since a migration in the fork's
@@ -43,7 +45,6 @@ VARIANT_STREAMS=(
   "bots|src/modules/PlayerBots/sql/world|turtle_world|*.sql"
   "bots|src/modules/PlayerBots/sql/world/classic|turtle_world|*.sql"
   "bots|src/modules/PlayerBots/sql/characters|turtle_char|*.sql"
-  "bots|sql/base|turtle_world|tw_world_playerbot.sql"
 )
 
 # What a first enable starts with. The fork's own aiplayerbot.conf.dist ships
