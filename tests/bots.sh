@@ -129,8 +129,9 @@ expect "the stock core places neither" \
 # A module reads its config from beside the mangosd.conf the core was started
 # with, so a bare name would send it to the prefix the build was configured with
 # and the settings placed above would never be read.
+# shellcheck disable=SC2016  # the pattern is the line as it stands there
 expect "the world server names its config by full path" \
-  "$(grep -c 'mangosd -c "\$CONF"' "$KIT/server/3-world-server.sh")" 1
+  "$(grep -c 'mangosd -c "$CONF"' "$KIT/server/3-world-server.sh")" 1
 
 # -- how long a first boot is given -------------------------------------------
 bot_cohort() { printf '%s' "$COHORT"; }

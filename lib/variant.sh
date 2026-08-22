@@ -49,6 +49,8 @@ VARIANT_STREAMS=(
 # What a first enable starts with. The fork's own aiplayerbot.conf.dist ships
 # a thousand, which is minutes of cache building on a first boot and a thousand
 # characters in every backup; its quick-start advises starting small.
+# Read by twow.sh, which sources this file.
+# shellcheck disable=SC2034
 VARIANT_BOTS_DEFAULT=20
 
 # Split one row into the caller's local variables, so the column order is
@@ -158,7 +160,8 @@ variant_binary_label() {
 # than forced. Logging is the caller's: this file is sourced by tests that have
 # none.
 variant_patches() {
-  local dir="$ROOT/patches/$(variant_active)" p
+  local dir p
+  dir="$ROOT/patches/$(variant_active)"
   [[ -d "$dir" ]] || return 0
   for p in "$dir"/*.patch; do [[ -e "$p" ]] && printf '%s\n' "$p"; done
   return 0

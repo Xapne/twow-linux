@@ -1489,8 +1489,9 @@ bots_purge() {  # $1 the --yes flag as given
   local prefix n c
   prefix=$(bot_prefix)
   n=$(bot_cohort) || n=0; c=$(bot_characters) || c=0
-  [[ "$n" =~ ^[0-9]+$ ]] && (( n > 0 )) \
-    || { say "no bot accounts in the realm"; return 0; }
+  if ! [[ "$n" =~ ^[0-9]+$ ]] || (( n == 0 )); then
+    say "no bot accounts in the realm"; return 0
+  fi
   world_running && die "the world server is running, and it holds the bots; stop it first: $0 stop"
   confirm_destructive "the $n bot account(s) on this realm go, and the $c character(s)
   they hold with them. The next boot creates them again, up to the cohort
