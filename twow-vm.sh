@@ -52,6 +52,8 @@ REGISTRY="${XDG_STATE_HOME:-$HOME/.local/state}/twow-vm/workdirs"
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/ui.sh"
 # shellcheck source=lib/firewall.sh
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/firewall.sh"
+# shellcheck source=lib/variant.sh
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/variant.sh"
 
 # Log helpers stay here: twow.sh prints "[setup]" lines that convert()
 # parses for the progress bar, so the two scripts speak differently on purpose.
@@ -355,8 +357,16 @@ convert() {
   if vm 'test -x twow/server/bin/mangosd && grep -q "conversion complete" twow/setup.log 2>/dev/null'; then
     say "already converted"; return
   fi
+  # Which core the guest builds. A conversion inside a VM has no terminal to put
+  # the question to, so the answer arrives in the environment the way the
+  # container takes it, and the guest writes it down for every command after.
+  local core="${TWOW_VARIANT:-}"
+  if [[ -n "$core" ]]; then
+    variant_known "$core" || die "TWOW_VARIANT=$core names no core here; there is: $(variant_labels | tr '\n' ' ')"
+    say "building the $core core: $(variant_field "$core" summary)"
+  fi
   say "running the conversion (this is the long one: full compile + db seed)"
-  vm 'cd twow && rm -f setup.log && (nohup ./twow.sh setup > setup.log 2>&1 & echo started)' >/dev/null
+  vm "cd twow && rm -f setup.log && (nohup env ${core:+TWOW_VARIANT=$core }./twow.sh setup > setup.log 2>&1 & echo started)" >/dev/null
 
   local t=0 pct=2 label="checking dependencies" tail="" poll="" alive="" warned=""
   while :; do
@@ -799,6 +809,7 @@ ${C_BOLD}Modes:${C_RST}
 
 Bring ${C_BOLD}TurtleWoW_1.18.zip${C_RST} and ${C_BOLD}data.zip${C_RST}; everything else is automatic.
 Work dir: ${C_DIM}$WD${C_RST} (override with TWOW_VM_DIR=...)
+Core: ${C_DIM}stock${C_RST}, or TWOW_VARIANT=bots $0 for a world of AI players
 
 EOF
 }

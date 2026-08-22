@@ -226,7 +226,10 @@ characters, so the auction house is stocked from the first boot and goes quiet
 when the realm asks for no bots. Accounts and characters keep their own place
 either way, and `off` offers to remove the bots' accounts and their
 characters. Setup asks about them once, and the
-interactive screen carries the cohort size alongside the other settings.
+interactive screen carries the cohort size alongside the other settings. A
+conversion with no terminal to ask - the container, and the VM deployer - takes
+the answer from `TWOW_VARIANT=bots` in its environment: `TWOW_VARIANT=bots
+./twow-vm.sh` builds the fork on the guest's one compile.
 
 `bots --level` decides where their levels sit. `spread` is the realm the core
 ships: bots at every level from 5 to 60, filling the world. `near` keeps the
