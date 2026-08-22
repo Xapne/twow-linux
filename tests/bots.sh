@@ -14,6 +14,7 @@ TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 ROOT="$TMP"; SERVER="$TMP/server"
 mkdir -p "$SERVER/bin"
 BOT_CONF="$SERVER/bin/aiplayerbot.conf"
+AHBOT_CONF="$SERVER/bin/ahbot.conf"
 CHANGES=()
 
 # -- the counts a cohort implies ----------------------------------------------
@@ -53,7 +54,9 @@ expect "the account prefix is left where it is" \
 
 # -- the config carried forward -----------------------------------------------
 DIST="$TMP/aiplayerbot.conf.dist"
-bot_conf_dist() { printf '%s' "$DIST"; }
+# The core keeps one dist per config, named after it, which is what the kit
+# asks for by name.
+bot_conf_dist() { printf '%s' "$TMP/$1.dist"; }
 cat > "$DIST" <<'CONF'
 [AiPlayerbotConf]
 AiPlayerbot.Enabled = 1
@@ -66,20 +69,20 @@ AiPlayerbot.NewSettingUpstreamAdded = 7
 # AiPlayerbot.CommentedOut = 3
 CONF
 expect "a setting the core has added is noticed" \
-  "$(bot_conf_missing)" "AiPlayerbot.NewSettingUpstreamAdded = 7"
-bot_conf_freshen > /dev/null
+  "$(bot_conf_missing "$BOT_CONF")" "AiPlayerbot.NewSettingUpstreamAdded = 7"
+bot_conf_freshen "$BOT_CONF" > /dev/null
 expect "and is taken in at the value the core ships" \
   "$(conf_get "$BOT_CONF" AiPlayerbot.NewSettingUpstreamAdded)" 7
 expect "a setting the core keeps commented out is left alone" \
   "$(conf_has "$BOT_CONF" AiPlayerbot.CommentedOut && echo added || echo left)" left
 expect "what the file already held keeps its own value" \
   "$(conf_get "$BOT_CONF" AiPlayerbot.MinRandomBots)" 20
-expect "nothing is left to carry forward twice" "$(bot_conf_missing)" ""
+expect "nothing is left to carry forward twice" "$(bot_conf_missing "$BOT_CONF")" ""
 
 # A config whose last line was never terminated is what an editor leaves behind,
 # and the first setting taken in would otherwise land on the end of it.
 printf '[AiPlayerbotConf]\nAiPlayerbot.Enabled = 1' > "$BOT_CONF"
-bot_conf_freshen > /dev/null
+bot_conf_freshen "$BOT_CONF" > /dev/null
 expect "a config with no closing newline still reads back" \
   "$(conf_get "$BOT_CONF" AiPlayerbot.Enabled)" 1
 expect "and the settings after it are their own lines" \
@@ -89,8 +92,45 @@ expect "and the settings after it are their own lines" \
 # every one of these is asked on every run.
 rm -f "$BOT_CONF"
 expect "no config carries nothing forward" \
-  "$(bot_conf_freshen && echo ok || echo failed)" ok
-expect "and lists nothing missing" "$(bot_conf_missing)" ""
+  "$(bot_conf_freshen "$BOT_CONF" && echo ok || echo failed)" ok
+expect "and lists nothing missing" "$(bot_conf_missing "$BOT_CONF")" ""
+
+# -- the auction house ---------------------------------------------------------
+# The bots' own auction house is the same module and the same lifetime: it is
+# placed with them and trades as their characters, so it is on only while there
+# are bots to trade.
+cat > "$TMP/ahbot.conf.dist" <<'CONF'
+[AhbotConf]
+AuctionHouseBot.Seller.Enabled = 0
+AhBot.Enabled = 0
+AhBot.GUID = 0
+CONF
+rm -f "$BOT_CONF" "$AHBOT_CONF"
+TWOW_VARIANT=bots ensure_variant_conf 20 > /dev/null
+expect "both of the core's configs are placed beside mangosd.conf" \
+  "$([[ -f "$BOT_CONF" && -f "$AHBOT_CONF" ]] && echo both || echo missing)" both
+expect "the auction house is on where there are bots to trade" \
+  "$(conf_get "$AHBOT_CONF" AhBot.Enabled)" 1
+# The bidders are the cohort's characters, so the fallback guid stays as the
+# core ships it.
+expect "and it is left pointing at no character of its own" \
+  "$(conf_get "$AHBOT_CONF" AhBot.GUID)" 0
+TWOW_VARIANT=bots ensure_variant_conf 0 > /dev/null
+expect "a realm that asks for no bots leaves it quiet" \
+  "$(conf_get "$AHBOT_CONF" AhBot.Enabled)" 0
+expect "and the repack's own auction bot stays where the core put it" \
+  "$(conf_get "$AHBOT_CONF" AuctionHouseBot.Seller.Enabled)" 0
+rm -f "$AHBOT_CONF"
+TWOW_VARIANT=stock ensure_variant_conf 20 > /dev/null
+expect "the stock core places neither" \
+  "$([[ -f "$AHBOT_CONF" ]] && echo placed || echo none)" none
+
+# -- where the core looks for them --------------------------------------------
+# A module reads its config from beside the mangosd.conf the core was started
+# with, so a bare name would send it to the prefix the build was configured with
+# and the settings placed above would never be read.
+expect "the world server names its config by full path" \
+  "$(grep -c 'mangosd -c "\$CONF"' "$KIT/server/3-world-server.sh")" 1
 
 # -- how long a first boot is given -------------------------------------------
 bot_cohort() { printf '%s' "$COHORT"; }

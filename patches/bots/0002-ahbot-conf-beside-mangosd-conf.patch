@@ -1,0 +1,52 @@
+The auction house bot reads its settings from a path fixed at build time,
+SYSCONFDIR "ahbot.conf", so a server run from a checkout rather than from an
+installed prefix never finds them and the module switches itself off. The
+config file beside mangosd.conf is looked at first, which is where this kit
+keeps every config the core reads; the fork already fixed the same thing for
+aiplayerbot.conf and this brings ahbot.conf in line with it.
+
+Carried here until the fork drops it upstream; the kit re-applies it after
+every pull and says so when it no longer fits.
+
+diff --git a/src/modules/PlayerBots/ahbot/AhBotConfig.cpp b/src/modules/PlayerBots/ahbot/AhBotConfig.cpp
+index 30a217c..a657628 100644
+--- a/src/modules/PlayerBots/ahbot/AhBotConfig.cpp
++++ b/src/modules/PlayerBots/ahbot/AhBotConfig.cpp
+@@ -25,10 +25,34 @@ void LoadSet(std::string value, T &res)
+ 
+ bool AhBotConfig::Initialize()
+ {
+-    if (!config.SetSource(SYSCONFDIR"ahbot.conf", "AHBot_"))
++    // The path is fixed at build time - SYSCONFDIR "ahbot.conf" - so a server
++    // run from anywhere other than the prefix it was configured with cannot
++    // find the auction house settings, and the module switches itself off with
++    // a message that names a file but not where it looked for it. Three places
++    // are tried now, most explicit first: a path given in mangosd.conf, then
++    // next to whichever mangosd.conf is actually in use, then the compiled-in
++    // default. This mirrors what PlayerbotAIConfig already does for
++    // aiplayerbot.conf.
++    std::string ahBotConfigFile = sConfig.GetStringDefault("AhBot.ConfigFile", "");
++
++    if (ahBotConfigFile.empty())
++    {
++        std::string const mainConfig = sConfig.GetFilename();
++        size_t const slash = mainConfig.find_last_of("/\\");
++        if (slash != std::string::npos)
++            ahBotConfigFile = mainConfig.substr(0, slash + 1) + "ahbot.conf";
++    }
++
++    if (ahBotConfigFile.empty() || !config.SetSource(ahBotConfigFile, "AHBot_"))
+     {
+-        sLog.outString("AhBot is Disabled. Unable to open configuration file ahbot.conf");
+-        return false;
++        if (!config.SetSource(SYSCONFDIR"ahbot.conf", "AHBot_"))
++        {
++            sLog.outString("AhBot is Disabled. No configuration file at %s%s%s.",
++                ahBotConfigFile.empty() ? "" : ahBotConfigFile.c_str(),
++                ahBotConfigFile.empty() ? "" : " or ",
++                SYSCONFDIR"ahbot.conf");
++            return false;
++        }
+     }
+ 
+     enabled = config.GetBoolDefault("AhBot.Enabled", true);

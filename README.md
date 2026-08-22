@@ -8,9 +8,9 @@ the repack is built from (Penqle's tortoise-wow, branch 1181dev). No Wine in
 the server stack. The game client still runs under Wine, as usual.
 
 `./twow.sh bots on` runs the realm on Shyalya's fork of that core instead, which
-adds a cohort of AI players that level, quest, group and trade. Each core keeps
-its own checkout and build tree, so switching between them afterwards is a
-relink and a restart.
+adds a cohort of AI players that level, quest, group, trade and stock the
+auction house between them. Each core keeps its own checkout and build tree, so
+switching between them afterwards is a relink and a restart.
 
 Works on any Linux distro: the dependency check names the right packages
 for Debian/Ubuntu, Fedora, openSUSE and Arch, and finds the MariaDB daemon
@@ -217,9 +217,12 @@ operation is documented in `server/README.linux.md`.
 ```
 
 The bots come from Shyalya's fork of the core, compiled once into its own build
-tree; `on` and `off` relink `server/bin` between the two and restart. Accounts
-and characters keep their own place either way, and `off` offers to remove the
-bots' accounts and their characters. Setup asks about them once, and the
+tree; `on` and `off` relink `server/bin` between the two and restart. The
+module's auction house comes with them: it buys and sells as the cohort's own
+characters, so the auction house is stocked from the first boot and goes quiet
+when the realm asks for no bots. Accounts and characters keep their own place
+either way, and `off` offers to remove the bots' accounts and their
+characters. Setup asks about them once, and the
 interactive screen carries the cohort size alongside the other settings.
 
 Twenty is what a first enable starts with. The cohort size decides how many bot

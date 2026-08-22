@@ -524,11 +524,16 @@ fix_configs() {
 # looks for it, on every run rather than only on a switch: a container or a
 # scripted install never passes through 'bots on' at all. An existing file keeps
 # the count it was given, and every count derived from it is settled again.
-ensure_variant_conf() {
-  [[ -n "$(variant_field "$(variant_active)" conf)" ]] || return 0
-  local n; n=$(bot_count 2>/dev/null) || n=""
+ensure_variant_conf() {  # $1 how many bots, or nothing for what the config asks
+  local confs n=${1:-}
+  confs=" $(variant_field "$(variant_active)" conf) "
+  [[ "$n" =~ ^[0-9]+$ ]] || { n=$(bot_count 2>/dev/null) || n=""; }
   [[ "$n" =~ ^[0-9]+$ ]] || n=$VARIANT_BOTS_DEFAULT
-  ensure_bot_conf "$n"
+  # The auction house is placed first, so the cohort size settles its switch
+  # along with every other count derived from it.
+  [[ "$confs" == *" ahbot.conf "* ]] && ensure_ahbot_conf
+  [[ "$confs" == *" aiplayerbot.conf "* ]] && ensure_bot_conf "$n"
+  return 0
 }
 
 # -----------------------------------------------------------------------------
@@ -1252,15 +1257,21 @@ interactive_config() {
 # differently are the world's, and the bots' own tables are seeded once and left
 # alone from then on.
 BOT_CONF="$SERVER/bin/aiplayerbot.conf"
+# The auction house the bots trade on. It is the same module and the same
+# lifetime as the players, so it is placed and carried forward with them.
+AHBOT_CONF="$SERVER/bin/ahbot.conf"
 
-# The bot config the repack never shipped. A build generates one beside the
-# module; the source's own copy stands in where a build tree has been cleared.
+# The dist a module config is copied from. A build generates one beside the
+# module; the source's own copy stands in where a build tree has been cleared,
+# and each subsystem keeps that one in a directory of its own.
+# $1 the file's name, as it is called beside mangosd.conf
 bot_conf_dist() {
   local b s
-  b="$(variant_build)/src/modules/PlayerBots/aiplayerbot.conf.dist"
-  s="$(variant_src)/src/modules/PlayerBots/playerbot/aiplayerbot.conf.dist.in"
+  b="$(variant_build)/src/modules/PlayerBots/$1.dist"
   [[ -f "$b" ]] && { printf '%s' "$b"; return 0; }
-  [[ -f "$s" ]] && { printf '%s' "$s"; return 0; }
+  for s in "$(variant_src)"/src/modules/PlayerBots/*/"$1.dist.in"; do
+    [[ -f "$s" ]] && { printf '%s' "$s"; return 0; }
+  done
   return 1
 }
 
@@ -1306,14 +1317,7 @@ bot_characters() {
 # for a thousand bots, and for one boot in ten thousand to wipe the cohort and
 # build it again.
 ensure_bot_conf() {  # $1 how many bots
-  local dist
-  if [[ ! -f "$BOT_CONF" ]]; then
-    dist=$(bot_conf_dist) || die "the bots source carries no aiplayerbot.conf to copy;
-  re-run '$0 bots on' once the source is in place"
-    cp "$dist" "$BOT_CONF" || die "could not write $BOT_CONF"
-    say "aiplayerbot.conf placed beside mangosd.conf, where the core looks for it"
-  fi
-  bot_conf_freshen
+  place_module_conf "$BOT_CONF"
   conf_set "$BOT_CONF" AiPlayerbot.Enabled 1
   set_bot_count "$1"
   # One boot with this set wipes the cohort and creates it again. That is a
@@ -1330,36 +1334,66 @@ set_bot_count() {  # $1 how many
   conf_set "$BOT_CONF" AiPlayerbot.MaxRandomBots "$1"
   conf_set "$BOT_CONF" AiPlayerbot.RandomBotAccountCount "$(bot_accounts_for "$1")"
   conf_set "$BOT_CONF" AiPlayerbot.RandomBotGuildCount "$(bot_guilds_for "$1")"
+  # The auction house runs on the cohort's own characters, so a realm that asks
+  # for no bots has nobody to trade and the core would report that every
+  # quarter of an hour.
+  [[ -f "$AHBOT_CONF" ]] \
+    && conf_set "$AHBOT_CONF" AhBot.Enabled "$([[ "$1" =~ ^[0-9]+$ ]] && (( $1 > 0 )) && echo 1 || echo 0)"
+  return 0
 }
 
 # Settings the core has gained since this copy was made, as whole lines from
 # the current dist. Commented lines are the core's own defaults and are left
 # where they are.
+# $1 the config in server/bin
 bot_conf_missing() {
-  [[ -f "$BOT_CONF" ]] || return 0
+  [[ -f "$1" ]] || return 0
   local dist line key
-  dist=$(bot_conf_dist) || return 0
+  dist=$(bot_conf_dist "${1##*/}") || return 0
   while IFS= read -r line; do
     key=${line%%=*}; key=${key%"${key##*[![:space:]]}"}
-    conf_has "$BOT_CONF" "$key" || printf '%s\n' "$line"
-  done < <(grep -E '^AiPlayerbot\.[A-Za-z0-9_.]+[[:space:]]*=' "$dist")
+    conf_has "$1" "$key" || printf '%s\n' "$line"
+  done < <(grep -E '^[A-Za-z][A-Za-z0-9_.]*[[:space:]]*=' "$dist")
   return 0
 }
 
 # Takes those in at the values the core ships them at. What the file already
 # holds is left alone, so a cohort size and any hand edit survive an update.
+# $1 the config in server/bin
 bot_conf_freshen() {
   local line added=0
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
     # A file whose last line was never terminated would take the first addition
     # onto the end of it.
-    [[ -s "$BOT_CONF" && -z "$(tail -c1 "$BOT_CONF")" ]] || printf '\n' >> "$BOT_CONF"
-    printf '%s\n' "$line" >> "$BOT_CONF"
+    [[ -s "$1" && -z "$(tail -c1 "$1")" ]] || printf '\n' >> "$1"
+    printf '%s\n' "$line" >> "$1"
     added=$(( added + 1 ))
-  done < <(bot_conf_missing)
-  (( added )) && say "$added new bot setting(s) taken from the core's own defaults"
+  done < <(bot_conf_missing "$1")
+  (( added )) && say "$added new setting(s) in ${1##*/}, taken from the core's own defaults"
   return 0
+}
+
+# Copies a module config into server/bin, where the core reads it from beside
+# mangosd.conf, and brings one already there forward.
+# $1 the config in server/bin
+place_module_conf() {
+  local dist name=${1##*/}
+  if [[ ! -f "$1" ]]; then
+    dist=$(bot_conf_dist "$name") || die "the $(variant_active) source carries no $name to copy;
+  re-run '$0 bots on' once the source is in place"
+    cp "$dist" "$1" || die "could not write $1"
+    say "$name placed beside mangosd.conf, where the core looks for it"
+  fi
+  bot_conf_freshen "$1"
+}
+
+# The auction house the bots trade on, put where the core reads it from. What
+# it needs beyond that is the cohort itself: bidders and sellers are the bots'
+# own characters, which is why AhBot.GUID is left at zero - it names the one
+# character to fall back on where a realm has no bot accounts at all.
+ensure_ahbot_conf() {
+  place_module_conf "$AHBOT_CONF"
 }
 
 # The number is asked rather than assumed: it decides how long the next boot
@@ -1372,6 +1406,7 @@ ask_bot_count() {
   [[ -t 0 ]] || return 0
   ui_intro "how many"
   ui_note "each bot is a character that levels, quests, groups and trades"
+  ui_note "they run the auction house between them, so it is stocked from the first boot"
   ui_note "the first boot builds their caches, which takes longer the more there are"
   ui_num "How many bots?" "$BOT_COUNT"
   BOT_COUNT=${ANSWER%%.*}
@@ -1392,6 +1427,10 @@ bots_report() {
   if [[ "$v" == bots && -f "$BOT_CONF" ]]; then
     want=$(bot_count); n=$(bot_characters) || n=""
     say "cohort    $want asked for in aiplayerbot.conf${n:+, $n character(s) in the realm now}"
+    [[ -f "$AHBOT_CONF" ]] \
+      && say "auctions  $([[ "$(conf_get "$AHBOT_CONF" AhBot.Enabled)" == 1 ]] \
+              && echo "run by the bots, buying and selling as their own characters" \
+              || echo "off in ahbot.conf")"
   fi
   other=bots; [[ "$v" == bots ]] && other=stock
   if [[ -d "$(TWOW_VARIANT=$other variant_src)" && -d "$(TWOW_VARIANT=$other variant_build)" ]]; then
@@ -1427,7 +1466,7 @@ bots_switch() {  # $1 target label, $2.. options
 
   if [[ "$target" == bots ]]; then
     if [[ -n "$count" ]]; then BOT_COUNT=$count; else ask_bot_count; fi
-    ensure_bot_conf "$BOT_COUNT"
+    ensure_variant_conf "$BOT_COUNT"
   fi
 
   start_native_db
@@ -1513,6 +1552,7 @@ offer_bots() {
   fi
   ui_intro "AI players"
   ui_note "a cohort of bots that level, quest, group and trade, so the world is not empty"
+  ui_note "they stock the auction house between them, as their own characters"
   ui_note "they run on a fork of the core, which is compiled once: 10-20 minutes"
   ui_select "Populate the world with AI players?" 0 \
     "No, just me and whoever I invite" \
@@ -1979,7 +2019,7 @@ doctor_service() {
 # install runs, the binary says what it is, and a switch that stopped halfway is
 # exactly where they disagree.
 doctor_core() {
-  local v built want have n
+  local v built want have n f
   v=$(variant_active)
   dr_head "core"
   built=$(variant_binary_label) || built=""
@@ -2016,11 +2056,25 @@ doctor_core() {
 $(( have * BOT_CHARS_PER_ACCOUNT )) bot character(s)" "$0 bots --count $want"
         fi
       fi
-      n=$(bot_conf_missing | wc -l)
-      (( n )) && dr_note "$n bot setting(s) have been added to the core since this config was copied ($0 update)"
     else
       dr_bad "no aiplayerbot.conf beside mangosd.conf, so the bots stay asleep" "$0 bots on"
     fi
+    # The auction house is the same module and reads its own file from the same
+    # place. It trades as the cohort's characters, so it is on with them.
+    if [[ -f "$AHBOT_CONF" ]]; then
+      if [[ "$(conf_get "$AHBOT_CONF" AhBot.Enabled)" == 1 ]]; then
+        dr_ok "the bots run the auction house, buying and selling as their own characters"
+      else
+        dr_note "the auction house is switched off in ahbot.conf ($0 bots --count <n> turns it on with the cohort)"
+      fi
+    else
+      dr_note "no ahbot.conf beside mangosd.conf, so the auction house stays quiet ($0 bots on)"
+    fi
+    for f in "$BOT_CONF" "$AHBOT_CONF"; do
+      [[ -f "$f" ]] || continue
+      n=$(bot_conf_missing "$f" | wc -l)
+      (( n )) && dr_note "$n setting(s) have been added to ${f##*/} since it was copied ($0 update)"
+    done
     if dr_db_ready; then
       n=$(bot_cohort) || n=0
       if [[ "$n" =~ ^[0-9]+$ ]] && (( n )); then
@@ -2650,9 +2704,10 @@ ${C_BOLD}Modes:${C_RST}
                  loopback.${C_RST}
   ${C_GREEN}bots${C_RST} [on | off | --count <n> | --purge]
                  populate the world with AI players: bots that level, quest,
-                 group and trade. They run on a fork of the core, which is
-                 compiled once; on and off switch between the two, and each
-                 keeps its own checkout, so switching back is quick.
+                 group, trade and run the auction house between them. They
+                 run on a fork of the core, which is compiled once; on and off
+                 switch between the two, and each keeps its own checkout, so
+                 switching back is quick.
                  ${C_DIM}Player accounts and characters are never touched.
                  --purge clears the bots' own, which the next boot writes
                  again. With no argument it says which core runs and what
@@ -2768,7 +2823,7 @@ case "$mode" in
                else
                  ask_bot_count
                fi
-               set_bot_count "$BOT_COUNT"
+               ensure_variant_conf "$BOT_COUNT"
                say "the realm asks for $BOT_COUNT bots; restart the server to apply: $0 run"
                # A cohort grows on the next boot and never shrinks on its own:
                # the core writes bot characters and leaves them where they are.

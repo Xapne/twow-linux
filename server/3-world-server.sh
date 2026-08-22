@@ -101,9 +101,12 @@ mkdir -p "$SERVER/logs"
 say "errors are kept in logs/server.log and logs/${ERRLOG##*/}"
 
 cd "$SERVER/bin"
+# The config is named by its full path: a core carrying modules reads their
+# configs from beside the mangosd.conf it was given, and a bare name leaves them
+# looking in the prefix the build was configured with.
 while :; do
   set +e
-  ./mangosd -c mangosd.conf 2>>"$ERRLOG"
+  ./mangosd -c "$CONF" 2>>"$ERRLOG"
   code=$?
   set -e
   halt && exit 0

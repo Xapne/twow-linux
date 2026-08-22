@@ -23,12 +23,13 @@ VARIANT_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 #   3 branch   branch in it
 #   4 cmake    options the build needs beyond the shared ones
 #   5 deps     labels in twow.sh's DEPS this core needs and the other does not
-#   6 conf     config files it brings that the repack does not ship
+#   6 conf     config files it brings that the repack does not ship, space
+#              separated, each placed beside mangosd.conf
 #   7 summary  one line, printed by 'bots' and by doctor
 VARIANTS=(
   "stock|https://github.com/Penqle/tortoise-wow.git|1181dev|||\
 |the core the repack is built from"
-  "bots|https://github.com/Shyalya/tortoise-wow.git|playerbots-integration-gh|-DBUILD_PLAYERBOTS=ON|Boost|aiplayerbot.conf\
+  "bots|https://github.com/Shyalya/tortoise-wow.git|playerbots-integration-gh|-DBUILD_PLAYERBOTS=ON|Boost|aiplayerbot.conf ahbot.conf\
 |a fork of it carrying AI players, with its own fixes"
 )
 
