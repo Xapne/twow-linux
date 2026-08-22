@@ -26,6 +26,11 @@ expect "both cores are declared" "$(variant_labels | tr '\n' ' ')" "stock bots "
 expect "the stock core takes no build options" "$(variant_field stock cmake)" ""
 expect "the bots core is built with its option" "$(variant_field bots cmake)" "-DBUILD_PLAYERBOTS=ON"
 expect "an unknown label has no row" "$(variant_field nope repo 2>/dev/null || echo none)" none
+# The configs a core brings are placed from this column alone, so a file the
+# core reads and the table leaves out is one nobody ever writes.
+expect "the stock core brings no config of its own" "$(variant_field stock conf)" ""
+expect "the bots core brings the players' and the auction house's" \
+  "$(variant_field bots conf)" "aiplayerbot.conf ahbot.conf"
 
 malformed=0
 for row in "${VARIANT_STREAMS[@]}"; do

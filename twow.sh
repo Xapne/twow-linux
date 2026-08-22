@@ -1292,6 +1292,14 @@ bot_guilds_for() {  # $1 how many bots
   printf '%s' "$g"
 }
 
+# Whether the world is started with the full path of its config. A module reads
+# its own settings from beside the mangosd.conf the core was handed, so a bare
+# name sends them to the prefix the build was configured with.
+world_start_names_conf() {  # $1 the start script, or the install's own
+  # shellcheck disable=SC2016  # the pattern is the line as it stands there
+  grep -q 'mangosd -c "$CONF"' "${1:-$SERVER/3-world-server.sh}" 2>/dev/null
+}
+
 # What the config asks for, and what the realm holds. The two differ while a
 # cohort is still being built, which is why both are reported.
 bot_count()  { conf_get "$BOT_CONF" AiPlayerbot.MinRandomBots 2>/dev/null; }
@@ -2076,6 +2084,12 @@ $(( have * BOT_CHARS_PER_ACCOUNT )) bot character(s)" "$0 bots --count $want"
       n=$(bot_conf_missing "$f" | wc -l)
       (( n )) && dr_note "$n setting(s) have been added to ${f##*/} since it was copied ($0 update)"
     done
+    if world_start_names_conf; then
+      dr_ok "the world server hands the core its config by full path, where the bots' own sit"
+    else
+      dr_bad "3-world-server.sh names mangosd.conf without its directory, and the bot configs
+  beside it are never read" "restore it from the repo: git -C $ROOT checkout server/3-world-server.sh"
+    fi
     if dr_db_ready; then
       n=$(bot_cohort) || n=0
       if [[ "$n" =~ ^[0-9]+$ ]] && (( n )); then
