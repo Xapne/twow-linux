@@ -49,7 +49,7 @@ end to end.
 | Map data | `data.zip`, 1,246,273,520 bytes |
 | Client | `1.18.1-7272-Hotfix-2026-04-12` |
 | Core source | Penqle/tortoise-wow, branch `1181dev`, at `b6b0e3d` |
-| Core source, with AI players | Shyalya/tortoise-wow, branch `playerbots-integration-gh` |
+| Core source, with AI players | Shyalya/tortoise-wow, branch `playerbots-integration-gh`, at `092ad20` |
 
 `./twow.sh doctor` checks an install against what this conversion knows, which
 is the first thing to run when a newer repack appears.
