@@ -524,7 +524,8 @@ fix_configs() {
 # looks for it, on every run rather than only on a switch: a container or a
 # scripted install never passes through 'bots on' at all. An existing file keeps
 # the count it was given, and every count derived from it is settled again.
-ensure_variant_conf() {  # $1 how many bots, or nothing for what the config asks
+ensure_variant_conf() {  # $1 how many bots, $2 near or spread; either may be
+                         # left out, and what the config asks for stands
   local confs n=${1:-}
   confs=" $(variant_field "$(variant_active)" conf) "
   [[ "$n" =~ ^[0-9]+$ ]] || { n=$(bot_count 2>/dev/null) || n=""; }
@@ -532,7 +533,7 @@ ensure_variant_conf() {  # $1 how many bots, or nothing for what the config asks
   # The auction house is placed first, so the cohort size settles its switch
   # along with every other count derived from it.
   [[ "$confs" == *" ahbot.conf "* ]] && ensure_ahbot_conf
-  [[ "$confs" == *" aiplayerbot.conf "* ]] && ensure_bot_conf "$n"
+  [[ "$confs" == *" aiplayerbot.conf "* ]] && ensure_bot_conf "$n" "${2:-}"
   return 0
 }
 
@@ -1324,10 +1325,17 @@ bot_characters() {
 # and settles the three keys that decide what a boot does. The shipped file asks
 # for a thousand bots, and for one boot in ten thousand to wipe the cohort and
 # build it again.
-ensure_bot_conf() {  # $1 how many bots
+ensure_bot_conf() {  # $1 how many bots, $2 near or spread, or nothing for what
+                     # the config asks
   place_module_conf "$BOT_CONF"
   conf_set "$BOT_CONF" AiPlayerbot.Enabled 1
   set_bot_count "$1"
+  # Written out on a first placement so the realm says which way it runs, and
+  # left alone after that: the levels are somebody's answer, not a derived count.
+  if [[ -n "${2:-}" ]]; then set_bot_levels "$2"
+  elif ! conf_has "$BOT_CONF" AiPlayerbot.SyncLevelWithPlayers; then
+    set_bot_levels "$VARIANT_BOTS_LEVELS_DEFAULT"
+  fi
   # One boot with this set wipes the cohort and creates it again. That is a
   # reset somebody asks for by hand, never what a switch leaves behind.
   conf_set "$BOT_CONF" AiPlayerbot.DeleteRandomBotAccounts 0
@@ -1347,6 +1355,38 @@ set_bot_count() {  # $1 how many
   # quarter of an hour.
   [[ -f "$AHBOT_CONF" ]] \
     && conf_set "$AHBOT_CONF" AhBot.Enabled "$([[ "$1" =~ ^[0-9]+$ ]] && (( $1 > 0 )) && echo 1 || echo 0)"
+  return 0
+}
+
+# How far above the players a bot may sit while it keeps to their level. The
+# core's own default, and what a re-roll measures against in both directions.
+BOT_LEVELS_ABOVE=5
+
+# Where the cohort's levels sit: 'spread' over the whole range the config names,
+# or 'near' the players online. The core re-rolls a bot that falls outside the
+# band, level and gear both, so this is a live rule rather than a one-time sort.
+bot_levels() {
+  if [[ "$(conf_get "$BOT_CONF" AiPlayerbot.SyncLevelWithPlayers 2>/dev/null)" == 1 ]]; then
+    printf 'near'
+  else
+    printf 'spread'
+  fi
+}
+
+# $1 near or spread. The keys are commented out in the core's own config, so
+# they are put rather than set.
+set_bot_levels() {
+  case "$1" in
+    near)
+      conf_put "$BOT_CONF" AiPlayerbot.SyncLevelWithPlayers 1
+      conf_put "$BOT_CONF" AiPlayerbot.SyncLevelMaxAbove "$BOT_LEVELS_ABOVE"
+      # What the band is measured against while nobody is online, which is where
+      # a realm left alone would otherwise keep the whole cohort at its own top.
+      conf_put "$BOT_CONF" AiPlayerbot.SyncLevelNoPlayer 1
+      ;;
+    spread) conf_put "$BOT_CONF" AiPlayerbot.SyncLevelWithPlayers 0 ;;
+    *) return 1 ;;
+  esac
   return 0
 }
 
@@ -1372,10 +1412,7 @@ bot_conf_freshen() {
   local line added=0
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
-    # A file whose last line was never terminated would take the first addition
-    # onto the end of it.
-    [[ -s "$1" && -z "$(tail -c1 "$1")" ]] || printf '\n' >> "$1"
-    printf '%s\n' "$line" >> "$1"
+    conf_append "$1" "$line"
     added=$(( added + 1 ))
   done < <(bot_conf_missing "$1")
   (( added )) && say "$added new setting(s) in ${1##*/}, taken from the core's own defaults"
@@ -1421,6 +1458,22 @@ ask_bot_count() {
   ui_outro "$BOT_COUNT bots"
 }
 
+# Where their levels sit. Answers land in BOT_LEVELS, the way the count lands in
+# BOT_COUNT.
+ask_bot_levels() {
+  BOT_LEVELS=$(bot_levels 2>/dev/null) || BOT_LEVELS=$VARIANT_BOTS_LEVELS_DEFAULT
+  [[ -t 0 ]] || return 0
+  ui_intro "at what level"
+  ui_note "spread fills the world at every level, which is the realm the core ships"
+  ui_note "near keeps them within $BOT_LEVELS_ABOVE levels of whoever is online, so there is company at yours"
+  ui_select "Where should the bots' levels sit?" \
+    "$([[ "$BOT_LEVELS" == near ]] && echo 1 || echo 0)" \
+    "Spread across the whole range" \
+    "Near the levels being played"
+  (( ANSWER == 1 )) && BOT_LEVELS=near || BOT_LEVELS=spread
+  ui_outro "levels $BOT_LEVELS"
+}
+
 # Which core is running, whether server/bin agrees, and what changing costs.
 bots_report() {
   local v built other want n
@@ -1435,6 +1488,11 @@ bots_report() {
   if [[ "$v" == bots && -f "$BOT_CONF" ]]; then
     want=$(bot_count); n=$(bot_characters) || n=""
     say "cohort    $want asked for in aiplayerbot.conf${n:+, $n character(s) in the realm now}"
+    if [[ "$(bot_levels)" == near ]]; then
+      say "levels    near the players online, within $BOT_LEVELS_ABOVE of them"
+    else
+      say "levels    spread from $(conf_get "$BOT_CONF" AiPlayerbot.RandomBotMinLevel) to $(conf_get "$BOT_CONF" AiPlayerbot.RandomBotMaxLevel)"
+    fi
     [[ -f "$AHBOT_CONF" ]] \
       && say "auctions  $([[ "$(conf_get "$AHBOT_CONF" AhBot.Enabled)" == 1 ]] \
               && echo "run by the bots, buying and selling as their own characters" \
@@ -1454,12 +1512,14 @@ bots_report() {
 # core this install runs, so a switch that fails partway leaves a record that
 # still matches the binaries in server/bin.
 bots_switch() {  # $1 target label, $2.. options
-  local target=$1 count=""; shift
+  local target=$1 count="" levels=""; shift
   while (( $# )); do
     case "$1" in
       --count) [[ "${2:-}" =~ ^[0-9]+$ ]] || die "--count needs a number"
                count=$2; shift 2 ;;
-      *)       die "unknown option '$1'; bots takes --count <number>" ;;
+      --level) [[ "${2:-}" =~ ^(near|spread)$ ]] || die "--level takes near or spread"
+               levels=$2; shift 2 ;;
+      *)       die "unknown option '$1'; bots takes --count <number> and --level near|spread" ;;
     esac
   done
   [[ -x "$SERVER/bin/mangosd" ]] || die "not converted yet; run: $0 setup"
@@ -1474,7 +1534,8 @@ bots_switch() {  # $1 target label, $2.. options
 
   if [[ "$target" == bots ]]; then
     if [[ -n "$count" ]]; then BOT_COUNT=$count; else ask_bot_count; fi
-    ensure_variant_conf "$BOT_COUNT"
+    if [[ -n "$levels" ]]; then BOT_LEVELS=$levels; else ask_bot_levels; fi
+    ensure_variant_conf "$BOT_COUNT" "$BOT_LEVELS"
   fi
 
   start_native_db
@@ -2717,12 +2778,14 @@ ${C_BOLD}Modes:${C_RST}
                  only differs behind a port forward; twow-vm.sh passes
                  0.0.0.0 because qemu's forwards never reach the guest's
                  loopback.${C_RST}
-  ${C_GREEN}bots${C_RST} [on | off | --count <n> | --purge]
+  ${C_GREEN}bots${C_RST} [on | off | --count <n> | --level near|spread | --purge]
                  populate the world with AI players: bots that level, quest,
                  group, trade and run the auction house between them. They
                  run on a fork of the core, which is compiled once; on and off
                  switch between the two, and each keeps its own checkout, so
-                 switching back is quick.
+                 switching back is quick. --level near keeps them to the
+                 levels being played, so there is company at yours; spread
+                 fills every level, which is how the core ships.
                  ${C_DIM}Player accounts and characters are never touched.
                  --purge clears the bots' own, which the next boot writes
                  again. With no argument it says which core runs and what
@@ -2851,12 +2914,31 @@ case "$mode" in
                else
                  say "the next boot writes what is missing, up to the new count"
                fi ;;
+      --level) [[ "$(variant_active)" == bots ]] \
+                 || die "this install runs the stock core; turn bots on first: $0 bots on"
+               [[ -f "$BOT_CONF" ]] || die "no aiplayerbot.conf yet; run: $0 bots on"
+               if [[ -n "${3:-}" ]]; then
+                 [[ "$3" =~ ^(near|spread)$ ]] || die "--level takes near or spread"
+                 BOT_LEVELS=$3
+               else
+                 ask_bot_levels
+               fi
+               set_bot_levels "$BOT_LEVELS"
+               if [[ "$BOT_LEVELS" == near ]]; then
+                 say "the bots keep within $BOT_LEVELS_ABOVE levels of whoever is online"
+                 # The core re-rolls a bot that sits outside the band, level and
+                 # gear both, a minute at a time rather than all at once.
+                 say "those outside it are levelled again as the realm runs; restart to apply: $0 run"
+               else
+                 say "the bots spread across the whole range again; restart to apply: $0 run"
+               fi ;;
       --purge) resolve_db_port; start_native_db; ensure_db_credentials; assert_own_database
                bots_purge "${3:-}" ;;
-      *) die "usage: $0 bots [on | off | --count <number> | --purge]
+      *) die "usage: $0 bots [on | off | --count <number> | --level near|spread | --purge]
   on       switch this install to the core that carries AI players
   off      switch back to the core the repack is built from
   --count  how many bots the realm asks for
+  --level  near keeps them to the levels being played, spread fills every level
   --purge  remove the bots and their characters; the next boot writes them again
   nothing  which core is running, and what changing it costs" ;;
     esac ;;

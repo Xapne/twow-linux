@@ -198,6 +198,23 @@ conf_has() {  # $1 file, $2 key
   grep -q "^${2//./\\.}[[:space:]]*=" "$1"
 }
 
+# Adds a line to a config, terminating a last line that never was. A file whose
+# end carries no newline would take the addition onto the end of it.
+conf_append() {  # $1 file, $2 line
+  [[ -s "$1" && -z "$(tail -c1 "$1")" ]] || printf '\n' >> "$1"
+  printf '%s\n' "$2" >> "$1"
+}
+
+# Sets a key whether or not the file already carries one, which is what a
+# config commenting its defaults out needs: a commented default is not a line
+# conf_set can rewrite.
+conf_put() {  # $1 file, $2 key, $3 value
+  if conf_has "$1" "$2"; then conf_set "$1" "$2" "$3"; return 0; fi
+  conf_append "$1" "$2 = $3"
+  CHANGES+=("$2: unset -> $3")
+  return 0
+}
+
 # $1 file, $2 key, $3 value, [$4 = quote]; no-op if unchanged. A missing key is
 # reported and skipped, so one absent setting does not abandon the whole form.
 # CONF_WARN selects the warning function, which keeps the interactive screen in

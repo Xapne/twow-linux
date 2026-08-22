@@ -54,6 +54,11 @@ VARIANT_STREAMS=(
 # shellcheck disable=SC2034
 VARIANT_BOTS_DEFAULT=20
 
+# Where their levels sit until somebody says otherwise: the whole range, which
+# is the realm the core ships. 'near' keeps them to the levels being played.
+# shellcheck disable=SC2034
+VARIANT_BOTS_LEVELS_DEFAULT=spread
+
 # Split one row into the caller's local variables, so the column order is
 # written down exactly once.
 variant_parse() {

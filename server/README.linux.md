@@ -94,8 +94,9 @@ before the world is stopped for maintenance, and removed afterwards.
 `bin/aiplayerbot.conf` and `bin/ahbot.conf` are present on an install running
 the bots core, beside `mangosd.conf` where the core looks for them: the players
 and the auction house they trade on. `../twow.sh bots` reports the cohort,
-`bots --count <n>` resizes it, and `bots --purge` clears the bots' accounts and
-characters, which the next boot writes again. Settings the core gains upstream
+`bots --count <n>` resizes it, `bots --level near|spread` decides whether their
+levels follow the players online or fill the whole range, and `bots --purge`
+clears the bots' accounts and characters, which the next boot writes again. Settings the core gains upstream
 are taken into those files on every update, at the values it ships them at.
 
 `../twow.sh doctor` examines an install rather than running one:

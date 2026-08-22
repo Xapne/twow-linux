@@ -214,6 +214,7 @@ operation is documented in `server/README.linux.md`.
 ./twow.sh bots on          # asks how many, then builds that core and switches
 ./twow.sh bots             # which core runs, and what changing it costs
 ./twow.sh bots --count 40  # resize the cohort; applies on the next boot
+./twow.sh bots --level near   # keep them to the levels being played
 ./twow.sh bots off         # back to the core the repack is built from
 ./twow.sh bots --purge     # clear the bots' accounts and characters
 ```
@@ -226,6 +227,13 @@ when the realm asks for no bots. Accounts and characters keep their own place
 either way, and `off` offers to remove the bots' accounts and their
 characters. Setup asks about them once, and the
 interactive screen carries the cohort size alongside the other settings.
+
+`bots --level` decides where their levels sit. `spread` is the realm the core
+ships: bots at every level from 5 to 60, filling the world. `near` keeps the
+cohort within five levels of whoever is online, so there is company at yours;
+the core measures the band once a minute and levels a bot again, gear and all,
+when it falls outside. Both are asked once at `bots on` and changed any time
+after.
 
 Twenty is what a first enable starts with. The cohort size decides how many bot
 characters exist: the core writes nine to every account it is told to create, so

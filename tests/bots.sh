@@ -125,6 +125,30 @@ TWOW_VARIANT=stock ensure_variant_conf 20 > /dev/null
 expect "the stock core places neither" \
   "$([[ -f "$AHBOT_CONF" ]] && echo placed || echo none)" none
 
+# -- where their levels sit ---------------------------------------------------
+# The core comments these keys out in its own config, so setting one means
+# adding the line rather than rewriting it. 'spread' is what the core ships.
+rm -f "$BOT_CONF"; TWOW_VARIANT=bots ensure_variant_conf 20 > /dev/null
+expect "a fresh config runs the levels the core ships" "$(bot_levels)" spread
+expect "and says so in a line of its own" \
+  "$(conf_get "$BOT_CONF" AiPlayerbot.SyncLevelWithPlayers)" 0
+set_bot_levels near
+expect "near keeps them to the players online" "$(bot_levels)" near
+expect "and names the band it keeps to" \
+  "$(conf_get "$BOT_CONF" AiPlayerbot.SyncLevelMaxAbove)" "$BOT_LEVELS_ABOVE"
+# Without this the band would be measured against the cohort's own top while
+# nobody is online, which is every level at once.
+expect "with a reference level for an empty realm" \
+  "$(conf_get "$BOT_CONF" AiPlayerbot.SyncLevelNoPlayer)" 1
+expect "an answer the config already carries is kept through a setup" \
+  "$(TWOW_VARIANT=bots ensure_variant_conf 20 > /dev/null; bot_levels)" near
+expect "and a setup told otherwise writes what it was told" \
+  "$(TWOW_VARIANT=bots ensure_variant_conf 20 spread > /dev/null; bot_levels)" spread
+expect "a level nobody offers is refused" \
+  "$(set_bot_levels sideways 2>/dev/null && echo taken || echo refused)" refused
+expect "setting the same one twice writes one line" \
+  "$(set_bot_levels near; set_bot_levels near; grep -c '^AiPlayerbot.SyncLevelWithPlayers' "$BOT_CONF")" 1
+
 # -- where the core looks for them --------------------------------------------
 # A module reads its config from beside the mangosd.conf the core was started
 # with, so a bare name would send it to the prefix the build was configured with
