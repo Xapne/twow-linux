@@ -103,6 +103,19 @@ docker compose exec twow ./twow.sh logs world -f
 `doctor` is the first thing to run when something looks wrong: it reads only,
 and names the fix beside each finding.
 
+## AI players
+
+A container converts without a terminal, so the one question `bots on` would
+ask is answered in `.env` instead: `TWOW_VARIANT=bots` builds the core that
+carries them on the container's first and only compile. A container already
+converted switches over the way any install does, at the cost of that compile:
+
+```
+docker compose exec twow ./twow.sh bots on
+```
+
+What the cohort is and what the settings do is in the main README.
+
 ## Connecting a client
 
 The realm answers on 127.0.0.1 and the ports are published there, so a client on

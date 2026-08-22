@@ -413,7 +413,7 @@ $(grep -A3 '\[error\]' <<<"$tail")"
     elif grep -q 'native MariaDB'           <<<"$tail"; then pct=87; label="starting the native database"
     elif grep -q 'compiling the server'     <<<"$tail"; then pct=35; label="configuring the build"
     elif grep -q 'building ACE'             <<<"$tail"; then pct=28; label="building the ACE library"
-    elif grep -q 'cloning'                  <<<"$tail"; then pct=22; label="cloning the 1181dev source"
+    elif grep -q 'cloning'                  <<<"$tail"; then pct=22; label="cloning the $(variant_field "${core:-stock}" branch) source"
     elif grep -q 'map data'                 <<<"$tail"; then pct=12; label="unpacking map data"
     elif grep -q 'extracting repack'        <<<"$tail"; then pct=6;  label="extracting the repack"
     fi
