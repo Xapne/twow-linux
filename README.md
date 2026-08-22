@@ -213,6 +213,7 @@ operation is documented in `server/README.linux.md`.
 ./twow.sh bots             # which core runs, and what changing it costs
 ./twow.sh bots --count 40  # resize the cohort; applies on the next boot
 ./twow.sh bots off         # back to the core the repack is built from
+./twow.sh bots --purge     # clear the bots' accounts and characters
 ```
 
 The bots come from Shyalya's fork of the core, compiled once into its own build
@@ -221,9 +222,12 @@ and characters keep their own place either way, and `off` offers to remove the
 bots' accounts and their characters. Setup asks about them once, and the
 interactive screen carries the cohort size alongside the other settings.
 
-Twenty is what a first enable starts with, which fills a realm without adding a
-thousand characters to every backup. The first boot after `on` builds the bots'
-caches and creates them, a few minutes; after that they are already there.
+Twenty is what a first enable starts with. The cohort size decides how many bot
+characters exist: the core writes nine to every account it is told to create, so
+the count the kit sets carries that too, and the core's own thousand would put
+four and a half thousand characters in every character backup. The first boot
+after `on` writes the cohort and builds its caches, a few minutes; after that
+they are already there.
 
 `./twow.sh status` reports what is running. `./twow.sh doctor`
 answers the other question, whether the install is correct: binaries and map
@@ -259,8 +263,8 @@ More modes:
 
 - `./twow.sh logs [world|realmd|errors|db|stderr] [-f]` - last 40 lines of a
   log, or `-f` to follow it
-- `./twow.sh account --list` - who has an account and at what level;
-  `--password <name>` changes one from a shell
+- `./twow.sh account --list` - who has an account and at what level, bots left
+  out until `--all` asks for them; `--password <name>` changes one from a shell
 - `./twow.sh reset --world` - empties the realm; the build, the world database
   and the client stay
 - `./twow.sh reset --all` - removes what setup generated, keeping `client/` and

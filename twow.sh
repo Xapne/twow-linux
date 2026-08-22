@@ -515,17 +515,20 @@ fix_configs() {
   # console under every statement the core runs. Errors only here; the log file
   # keeps its own detail through LogFileLevel, and 'run <level>' overrides it.
   set_console_level 1
-  # A core that brings a config the repack never shipped gets it put where it
-  # looks for it, on every run rather than only on a switch: a container or a
-  # scripted install never passes through 'bots on' at all. An existing file
-  # keeps the count it was given.
-  if [[ -n "$(variant_field "$(variant_active)" conf)" ]]; then
-    local n; n=$(bot_count 2>/dev/null) || n=""
-    [[ "$n" =~ ^[0-9]+$ ]] || n=$VARIANT_BOTS_DEFAULT
-    ensure_bot_conf "$n"
-  fi
+  ensure_variant_conf
   write_db_env
   say "configs checked (database $TWOW_DB_HOST:$TWOW_DB_PORT, DataDir lowercase)"
+}
+
+# A core that brings a config the repack never shipped gets it put where it
+# looks for it, on every run rather than only on a switch: a container or a
+# scripted install never passes through 'bots on' at all. An existing file keeps
+# the count it was given, and every count derived from it is settled again.
+ensure_variant_conf() {
+  [[ -n "$(variant_field "$(variant_active)" conf)" ]] || return 0
+  local n; n=$(bot_count 2>/dev/null) || n=""
+  [[ "$n" =~ ^[0-9]+$ ]] || n=$VARIANT_BOTS_DEFAULT
+  ensure_bot_conf "$n"
 }
 
 # -----------------------------------------------------------------------------
@@ -761,11 +764,23 @@ account_exists() {  # $1 name
 
 # Who is on this server, at what level, and when they were last seen. rank 3 and
 # above is a game master.
-list_accounts() {
+# Bot accounts are the core's own bookkeeping and outnumber the players on a
+# populated realm, so the list is people by default and says how many it left
+# out.
+list_accounts() {  # $1 --all to include the bot accounts
+  local prefix where="" hidden=""
+  prefix=$(bot_prefix)
+  if [[ "${1:-}" != --all ]]; then
+    where="WHERE username NOT LIKE '$prefix%'"
+    hidden=$(bot_cohort) || hidden=""
+  fi
   DB -e "SELECT id, username, \`rank\`, DATE(joindate) AS joined,
                 DATE(last_login) AS last_seen, last_ip
-           FROM turtle_logon.account ORDER BY id" \
+           FROM turtle_logon.account $where ORDER BY id" \
     || die "the account list could not be read; is the database up? ($0 status)"
+  [[ "$hidden" =~ ^[0-9]+$ ]] && (( hidden )) \
+    && say "$hidden bot account(s) left out; --all lists them too"
+  return 0
 }
 
 # The world console does this with 'account set password', which is reachable
@@ -1249,6 +1264,23 @@ bot_conf_dist() {
   return 1
 }
 
+# The core fills every account it creates with nine characters on this
+# expansion and draws the cohort from that pool, so the account count is what
+# decides how many characters a first boot writes.
+BOT_CHARS_PER_ACCOUNT=9
+bot_accounts_for() {  # $1 how many bots
+  printf '%s' "$(( ( ${1:-0} + BOT_CHARS_PER_ACCOUNT - 1) / BOT_CHARS_PER_ACCOUNT ))"
+}
+
+# Guilds are founded by bots and filled from the same pool, so the shipped
+# twenty would leave a small realm with a guild per bot.
+BOT_GUILDS_MAX=20
+bot_guilds_for() {  # $1 how many bots
+  local g; g=$(bot_accounts_for "${1:-0}")
+  (( g > BOT_GUILDS_MAX )) && g=$BOT_GUILDS_MAX
+  printf '%s' "$g"
+}
+
 # What the config asks for, and what the realm holds. The two differ while a
 # cohort is still being built, which is why both are reported.
 bot_count()  { conf_get "$BOT_CONF" AiPlayerbot.MinRandomBots 2>/dev/null; }
@@ -1259,6 +1291,14 @@ bot_prefix() {
 bot_cohort() {
   DB -N -B -e "SELECT COUNT(*) FROM turtle_logon.account
      WHERE username LIKE '$(bot_prefix)%'" 2>/dev/null
+}
+
+# The characters those accounts hold, which is what the cohort is drawn from
+# and what every character backup carries.
+bot_characters() {
+  DB -N -B -e "SELECT COUNT(*) FROM turtle_char.characters c
+          JOIN turtle_logon.account a ON a.id = c.account
+         WHERE a.username LIKE '$(bot_prefix)%'" 2>/dev/null
 }
 
 # Puts the bot config where the core looks for it, which is beside mangosd.conf,
@@ -1273,6 +1313,7 @@ ensure_bot_conf() {  # $1 how many bots
     cp "$dist" "$BOT_CONF" || die "could not write $BOT_CONF"
     say "aiplayerbot.conf placed beside mangosd.conf, where the core looks for it"
   fi
+  bot_conf_freshen
   conf_set "$BOT_CONF" AiPlayerbot.Enabled 1
   set_bot_count "$1"
   # One boot with this set wipes the cohort and creates it again. That is a
@@ -1280,12 +1321,45 @@ ensure_bot_conf() {  # $1 how many bots
   conf_set "$BOT_CONF" AiPlayerbot.DeleteRandomBotAccounts 0
 }
 
-# Both ends of the range move together: a range would have the core create bots
-# up to the top of it and log in as few as the bottom, which reads as the count
-# being ignored.
+# Every count the core derives from the cohort moves with it. Both ends of the
+# range are set, since a range creates bots up to the top and logs in as few as
+# the bottom, and the account count with them: the shipped five hundred accounts
+# write four and a half thousand characters whatever the cohort asks for.
 set_bot_count() {  # $1 how many
   conf_set "$BOT_CONF" AiPlayerbot.MinRandomBots "$1"
   conf_set "$BOT_CONF" AiPlayerbot.MaxRandomBots "$1"
+  conf_set "$BOT_CONF" AiPlayerbot.RandomBotAccountCount "$(bot_accounts_for "$1")"
+  conf_set "$BOT_CONF" AiPlayerbot.RandomBotGuildCount "$(bot_guilds_for "$1")"
+}
+
+# Settings the core has gained since this copy was made, as whole lines from
+# the current dist. Commented lines are the core's own defaults and are left
+# where they are.
+bot_conf_missing() {
+  [[ -f "$BOT_CONF" ]] || return 0
+  local dist line key
+  dist=$(bot_conf_dist) || return 0
+  while IFS= read -r line; do
+    key=${line%%=*}; key=${key%"${key##*[![:space:]]}"}
+    conf_has "$BOT_CONF" "$key" || printf '%s\n' "$line"
+  done < <(grep -E '^AiPlayerbot\.[A-Za-z0-9_.]+[[:space:]]*=' "$dist")
+  return 0
+}
+
+# Takes those in at the values the core ships them at. What the file already
+# holds is left alone, so a cohort size and any hand edit survive an update.
+bot_conf_freshen() {
+  local line added=0
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    # A file whose last line was never terminated would take the first addition
+    # onto the end of it.
+    [[ -s "$BOT_CONF" && -z "$(tail -c1 "$BOT_CONF")" ]] || printf '\n' >> "$BOT_CONF"
+    printf '%s\n' "$line" >> "$BOT_CONF"
+    added=$(( added + 1 ))
+  done < <(bot_conf_missing)
+  (( added )) && say "$added new bot setting(s) taken from the core's own defaults"
+  return 0
 }
 
 # The number is asked rather than assumed: it decides how long the next boot
@@ -1316,8 +1390,8 @@ bots_report() {
   finish it with: $0 bots $([[ "$v" == bots ]] && echo on || echo off)"
   fi
   if [[ "$v" == bots && -f "$BOT_CONF" ]]; then
-    want=$(bot_count); n=$(bot_cohort) || n=""
-    say "cohort    $want asked for in aiplayerbot.conf${n:+, $n in the realm now}"
+    want=$(bot_count); n=$(bot_characters) || n=""
+    say "cohort    $want asked for in aiplayerbot.conf${n:+, $n character(s) in the realm now}"
   fi
   other=bots; [[ "$v" == bots ]] && other=stock
   if [[ -d "$(TWOW_VARIANT=$other variant_src)" && -d "$(TWOW_VARIANT=$other variant_build)" ]]; then
@@ -1369,18 +1443,36 @@ bots_switch() {  # $1 target label, $2.. options
   return 0
 }
 
-# Bots left behind after a switch back are characters like any other: they log
-# in nowhere, they sit in every character backup, and the stock core has no idea
-# what they are. Clearing them is the same sweep the repack's own accounts get.
-offer_bot_purge() {
-  local n prefix
+# The bots and everything filed under them, cleared with the same sweep the
+# repack's own accounts get. A cohort is bookkeeping rather than anybody's
+# characters: the next boot writes it again, up to whatever the config asks for.
+bots_purge() {  # $1 the --yes flag as given
+  local prefix n c
   prefix=$(bot_prefix)
+  n=$(bot_cohort) || n=0; c=$(bot_characters) || c=0
+  [[ "$n" =~ ^[0-9]+$ ]] && (( n > 0 )) \
+    || { say "no bot accounts in the realm"; return 0; }
+  world_running && die "the world server is running, and it holds the bots; stop it first: $0 stop"
+  confirm_destructive "the $n bot account(s) on this realm go, and the $c character(s)
+  they hold with them. The next boot creates them again, up to the cohort
+  aiplayerbot.conf asks for." "${1:-}" || return 0
+  sweep_accounts "username LIKE '$prefix%'" \
+    || die "the database refused the sweep; nothing is guaranteed removed"
+  say "removed $n bot account(s) and the $c character(s) they held"
+  return 0
+}
+
+# Bots left behind after a switch back log in nowhere, sit in every character
+# backup, and mean nothing to the stock core. Clearing them is offered at the
+# moment they stop belonging to anything.
+offer_bot_purge() {
+  local n
   n=$(bot_cohort) || return 0
   [[ "$n" =~ ^[0-9]+$ ]] && (( n > 0 )) || return 0
   # Removing characters is answered for, never assumed: a run with no terminal
   # keeps them and says how they go.
   if [[ ! -t 0 ]]; then
-    say "$n bot account(s) stay in the realm; '$0 bots off' from a terminal offers to clear them"
+    say "$n bot account(s) stay in the realm; clear them with: $0 bots --purge"
     return 0
   fi
   ui_intro "$n bot account(s) are still in the realm"
@@ -1389,11 +1481,9 @@ offer_bot_purge() {
   ui_select "Remove them?" 0 \
     "Yes, remove the bots and their characters" \
     "No, leave them where they are"
-  if (( ANSWER == 1 )); then ui_outro "left in place"; return 0; fi
-  sweep_accounts "username LIKE '$prefix%'" \
-    || { ui_outro "the sweep failed; the bots are still there"; return 0; }
-  ui_outro "removed $n bot account(s) and everything filed under them"
-  return 0
+  if (( ANSWER == 1 )); then ui_outro "left in place; clear them later with: $0 bots --purge"; return 0; fi
+  ui_outro "clearing the bots"
+  bots_purge --yes
 }
 
 # Packages the bots core needs and this system has not got. Tier and claim both
@@ -1530,6 +1620,9 @@ update_all() {
   fi
   install_binaries "$build/src/mangosd/mangosd" "$build/src/realmd/realmd"
   say "installed updated binaries into server/bin/"
+  # A core that brings its own config gains settings upstream, and the copy in
+  # server/bin keeps its values while taking the new ones.
+  ensure_variant_conf
 
   start_native_db
   backup_before_migrations "$after"
@@ -1616,7 +1709,7 @@ status_all() {
   elif world_running; then say "world     starting; not accepting connections yet"
   else warn "world     not running"; fi
   local v; v=$(variant_active)
-  if [[ "$v" == bots ]]; then say "core      bots ($(bot_cohort 2>/dev/null || echo '?') bot account(s))"
+  if [[ "$v" == bots ]]; then say "core      bots ($(bot_characters 2>/dev/null || echo '?') bot character(s))"
   else say "core      stock"; fi
   if [[ -f "$SERVICE_UNIT" ]] && command -v systemctl >/dev/null 2>&1; then
     say "service   $(systemctl --user is-active "$SERVICE_NAME" 2>/dev/null || true), $(systemctl --user is-enabled "$SERVICE_NAME" 2>/dev/null || true) at boot"
@@ -1886,7 +1979,7 @@ doctor_service() {
 # install runs, the binary says what it is, and a switch that stopped halfway is
 # exactly where they disagree.
 doctor_core() {
-  local v built want n
+  local v built want have n
   v=$(variant_active)
   dr_head "core"
   built=$(variant_binary_label) || built=""
@@ -1910,21 +2003,36 @@ doctor_core() {
       [[ "$(conf_get "$BOT_CONF" AiPlayerbot.DeleteRandomBotAccounts)" == 1 ]] \
         && dr_bad "DeleteRandomBotAccounts is on, which wipes and rebuilds the cohort every boot" \
              "set AiPlayerbot.DeleteRandomBotAccounts = 0"
+      # The accounts the core is told to create decide how many characters the
+      # first boot writes, nine to an account, and the cohort is drawn from
+      # those. A config whose accounts no longer follow the cohort is what
+      # leaves thousands of characters in a realm that asked for twenty bots.
+      want=$(bot_count); have=$(conf_get "$BOT_CONF" AiPlayerbot.RandomBotAccountCount)
+      if [[ "$want" =~ ^[0-9]+$ && "$have" =~ ^[0-9]+$ ]]; then
+        if (( have == $(bot_accounts_for "$want") )); then
+          dr_ok "$have bot account(s) are asked for, which carries a cohort of $want"
+        else
+          dr_bad "the config creates $have bot account(s) for a cohort of $want, which is \
+$(( have * BOT_CHARS_PER_ACCOUNT )) bot character(s)" "$0 bots --count $want"
+        fi
+      fi
+      n=$(bot_conf_missing | wc -l)
+      (( n )) && dr_note "$n bot setting(s) have been added to the core since this config was copied ($0 update)"
     else
       dr_bad "no aiplayerbot.conf beside mangosd.conf, so the bots stay asleep" "$0 bots on"
     fi
     if dr_db_ready; then
-      want=$(bot_count); n=$(bot_cohort) || n=0
+      n=$(bot_cohort) || n=0
       if [[ "$n" =~ ^[0-9]+$ ]] && (( n )); then
-        dr_ok "$n bot account(s) in the realm, $want asked for"
+        dr_ok "$n bot account(s) in the realm, holding $(bot_characters) character(s)"
       else
         dr_note "no bots in the realm yet; the next boot creates them"
       fi
     fi
-  elif dr_db_ready && [[ -f "$BOT_CONF" ]]; then
+  elif dr_db_ready; then
     n=$(bot_cohort) || n=0
     [[ "$n" =~ ^[0-9]+$ ]] && (( n )) \
-      && dr_note "$n bot account(s) from the other core are still here ($0 bots off offers to clear them)"
+      && dr_note "$n bot account(s) from the other core are still here ($0 bots --purge clears them)"
   fi
   return 0
 }
@@ -2010,14 +2118,23 @@ confirm_destructive() {
 # Empties the realm and leaves the build standing: every account goes, and with
 # it every character and pet, the same way the repack's own pair is cleared.
 reset_world() {  # $1 the --yes flag as given
-  local n
+  local n bots=0 mine
   n=$(DB -N -B -e "SELECT COUNT(*) FROM turtle_logon.account" 2>/dev/null) \
     || die "the database is not answering; start it with: $0 run"
-  confirm_destructive "every account on this realm ($n) goes, and every character
-  and pet with them. The build, the world database and the client stay." "${1:-}" || return 0
+  # Bots are counted apart from the people: a realm of twenty players and a
+  # thousand bots would otherwise ask about a thousand and twenty accounts.
+  bots=$(bot_cohort) || bots=0
+  [[ "$bots" =~ ^[0-9]+$ ]] || bots=0
+  mine=$(( n - bots ))
+  confirm_destructive "every account on this realm ($mine, plus $bots the bots hold)
+  goes, and every character and pet with them. The build, the world database and
+  the client stay." "${1:-}" || return 0
   sweep_accounts "1 = 1" || die "the database refused the sweep; nothing is guaranteed removed"
   say "the realm is empty; the next account is id 1"
   say "make one with: $0 account"
+  [[ "$(variant_active)" == bots ]] \
+    && say "the bots are created again on the next boot, which takes a few minutes"
+  return 0
 }
 
 # Back to a bare checkout: what setup generated goes, what was downloaded by
@@ -2143,12 +2260,27 @@ console_attach() {
 # the cap is generous and reaching it reads as slow rather than as broken.
 WORLD_WAIT=120
 
+# How long a start is given before it is left to the console. A first boot on
+# the bots core writes the cohort's characters before the world opens its port,
+# which is minutes rather than seconds.
+world_wait() {
+  local n
+  [[ "$(variant_active)" == bots ]] || { printf '%s' "$WORLD_WAIT"; return 0; }
+  n=$(bot_cohort) || n=""
+  [[ "$n" =~ ^[0-9]+$ ]] && (( n > 0 )) \
+    && { printf '%s' "$WORLD_WAIT"; return 0; }
+  printf '%s' "$(( WORLD_WAIT * 5 ))"
+}
+
 # Which of three things became of a world just handed to tmux: the realm opened
 # its port, the console session ended while loading, or loading was still going
 # at the cap. The session is what is watched, since 3-world-server.sh brings
 # mangosd back after a crash and the process alone flaps in between.
 wait_for_world() {
-  local waited=0 p
+  local waited=0 p limit
+  limit=$(world_wait)
+  (( limit > WORLD_WAIT )) \
+    && say "the bots' characters are written on this first boot, so the world takes longer to open"
   until world_ready; do
     if ! console_running; then
       warn "the world server stopped after ${waited}s, while it was still loading"
@@ -2162,8 +2294,8 @@ wait_for_world() {
       say "a start that got no further than its first message: $0 logs stderr"
       return 1
     fi
-    (( waited < WORLD_WAIT )) || {
-      say "still loading after ${WORLD_WAIT}s; watch it with: $0 console"
+    (( waited < limit )) || {
+      say "still loading after ${limit}s; watch it with: $0 console"
       return 0
     }
     sleep 1
@@ -2457,11 +2589,12 @@ ${C_BOLD}Modes:${C_RST}
                  until it has been answered.
                  ${C_DIM}Part of setup already; twow-vm.sh calls it on its own
                  because its conversion runs without a terminal.${C_RST}
-  ${C_GREEN}account${C_RST} [--list | --password <name> | --if-none]
+  ${C_GREEN}account${C_RST} [--list [--all] | --password <name> | --if-none]
                  create a game master account and log in as yourself
                  instead of the repack's shared ADMIN. Offered once at the
                  end of setup; this runs it again whenever you want.
-                 --list shows who is here and at what level; --password
+                 --list shows who is here and at what level, leaving the
+                 bots out until --all asks for them; --password
                  changes one, which the world console allows only from its
                  own prompt.
                  ${C_DIM}--if-none offers only while no account of your own
@@ -2515,13 +2648,15 @@ ${C_BOLD}Modes:${C_RST}
                  only differs behind a port forward; twow-vm.sh passes
                  0.0.0.0 because qemu's forwards never reach the guest's
                  loopback.${C_RST}
-  ${C_GREEN}bots${C_RST} [on | off | --count <n>]
+  ${C_GREEN}bots${C_RST} [on | off | --count <n> | --purge]
                  populate the world with AI players: bots that level, quest,
                  group and trade. They run on a fork of the core, which is
                  compiled once; on and off switch between the two, and each
                  keeps its own checkout, so switching back is quick.
-                 ${C_DIM}Accounts and characters are never touched. With no
-                 argument it says which core runs and what changing costs.${C_RST}
+                 ${C_DIM}Player accounts and characters are never touched.
+                 --purge clears the bots' own, which the next boot writes
+                 again. With no argument it says which core runs and what
+                 changing costs.${C_RST}
   ${C_GREEN}update${C_RST}         after upstream changes: pull the latest source for the core
                  this install runs, rebuild only what changed, back up every
                  database a migration reaches, then apply the new ones.
@@ -2580,11 +2715,13 @@ case "$mode" in
       "")         make_gm_account ;;
       --if-none)  if has_own_gm; then say "game master account already there"
                   else make_gm_account; fi ;;
-      --list)     list_accounts ;;
+      --list)     [[ -z "${3:-}" || "$3" == --all ]] \
+                    || die "unknown option '$3'; --list takes --all, which includes the bots"
+                  list_accounts "${3:-}" ;;
       --password) [[ -n "${3:-}" ]] || die "usage: $0 account --password <name>"
                   set_account_password "$3" ;;
-      *)          die "unknown option '$2'; account takes --list, --password <name>,
-  --if-none, or nothing to create one" ;;
+      *)          die "unknown option '$2'; account takes --list [--all],
+  --password <name>, --if-none, or nothing to create one" ;;
     esac ;;
   realm)
     check_deps; resolve_db_port; start_native_db; ensure_db_credentials; assert_own_database
@@ -2633,11 +2770,24 @@ case "$mode" in
                fi
                set_bot_count "$BOT_COUNT"
                say "the realm asks for $BOT_COUNT bots; restart the server to apply: $0 run"
-               say "the cohort grows or shrinks on the next boot, it is not rebuilt" ;;
-      *) die "usage: $0 bots [on | off | --count <number>]
+               # A cohort grows on the next boot and never shrinks on its own:
+               # the core writes bot characters and leaves them where they are.
+               # What the new count asks for is the pool its accounts hold, not
+               # the cohort itself, which is drawn from that pool.
+               written=$(bot_characters 2>/dev/null) || written=""
+               pool=$(( $(bot_accounts_for "$BOT_COUNT") * BOT_CHARS_PER_ACCOUNT ))
+               if [[ "$written" =~ ^[0-9]+$ ]] && (( written > pool )); then
+                 say "$written bot character(s) are already written; the extra ones stay until: $0 bots --purge"
+               else
+                 say "the next boot writes what is missing, up to the new count"
+               fi ;;
+      --purge) resolve_db_port; start_native_db; ensure_db_credentials; assert_own_database
+               bots_purge "${3:-}" ;;
+      *) die "usage: $0 bots [on | off | --count <number> | --purge]
   on       switch this install to the core that carries AI players
   off      switch back to the core the repack is built from
   --count  how many bots the realm asks for
+  --purge  remove the bots and their characters; the next boot writes them again
   nothing  which core is running, and what changing it costs" ;;
     esac ;;
   status)  status_all ;;

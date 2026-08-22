@@ -92,8 +92,10 @@ before the world is stopped for maintenance, and removed afterwards.
 - `./clear-logs.sh`: empties the logs/ folder.
 
 `bin/aiplayerbot.conf` is present on an install running the bots core, beside
-`mangosd.conf` where the core looks for it. `../twow.sh bots` reports the cohort
-and `bots --count <n>` resizes it.
+`mangosd.conf` where the core looks for it. `../twow.sh bots` reports the cohort,
+`bots --count <n>` resizes it, and `bots --purge` clears the bots' accounts and
+characters, which the next boot writes again. Settings the core gains upstream
+are taken into that file on every update, at the values it ships them at.
 
 `../twow.sh doctor` examines an install rather than running one:
 binaries and map data, the game databases and their pending migrations, what
