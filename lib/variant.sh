@@ -126,12 +126,12 @@ variant_streams() {
 # Which cores claim a dependency, for a report that has to say who it is for.
 # $1 label
 variant_claiming_dep() {
-  local row out=() v_label v_repo v_branch v_cmake v_deps v_conf v_summary
+  local row claiming=() v_label v_repo v_branch v_cmake v_deps v_conf v_summary
   for row in "${VARIANTS[@]}"; do
     variant_parse "$row"
-    [[ " $v_deps " == *" $1 "* ]] && out+=("$v_label")
+    [[ " $v_deps " == *" $1 "* ]] && claiming+=("$v_label")
   done
-  printf '%s' "${out[*]}"
+  printf '%s' "${claiming[*]}"
 }
 
 # Whether a dependency labelled in DEPS is one this core needs. A label no

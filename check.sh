@@ -7,8 +7,8 @@
 # green run there.
 #
 # Usage: ./check.sh [--patches]
-#   --patches  also asks whether the fixes in patches/ still apply to the
-#              branches lib/variant.sh names, which needs the network
+#   --patches  asks whether the fixes in patches/ still apply to the branches
+#              lib/variant.sh names, and runs nothing else; it needs the network
 # =============================================================================
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,7 +18,7 @@ PATCHES=0
 case "${1:-}" in
   "")         ;;
   --patches)  PATCHES=1 ;;
-  *) printf 'Usage: %s [--patches]\n  --patches  asks upstream whether the carried fixes still apply\n' "$0" >&2
+  *) printf 'Usage: %s [--patches]\n  --patches  asks upstream whether the carried fixes still apply, and nothing else\n' "$0" >&2
      exit 2 ;;
 esac
 
@@ -29,6 +29,41 @@ bad()  { printf '  \033[1;31mFAIL\033[0m  %s\n' "$*"; RC=1; }
 skip() { printf '  \033[1;33mskip\033[0m  %s\n' "$*"; }
 stage(){ printf '\n\033[1m%s\033[0m\n' "$*"; }
 RC=0
+
+# What upstream has done to the files the kit patches, asked of the network and
+# of nothing else: the gate below runs on every push, under a shellcheck pinned
+# there, and this one runs on a schedule.
+if (( PATCHES )); then
+  stage "carried fixes"
+  # shellcheck source=lib/variant.sh
+  . "$ROOT/lib/variant.sh"
+  found=0
+  for label in $(variant_labels); do
+    mapfile -t PATCHFILES < <(find "patches/$label" -name '*.patch' 2>/dev/null | sort)
+    (( ${#PATCHFILES[@]} )) || continue
+    found=1
+    repo=$(variant_field "$label" repo); branch=$(variant_field "$label" branch)
+    tmp=$(mktemp -d)
+    if msg=$(git clone --quiet --depth 1 --branch "$branch" "$repo" "$tmp" 2>&1); then
+      for p in "${PATCHFILES[@]}"; do
+        if msg=$(git -C "$tmp" apply --check "$ROOT/$p" 2>&1); then
+          ok "${p#patches/} applies to $label $branch"
+        else
+          bad "${p#patches/} no longer applies to $label $branch"
+          printf '%s\n' "$msg"
+        fi
+      done
+    else
+      bad "could not clone $repo at $branch"
+      printf '%s\n' "$msg"
+    fi
+    rm -rf "$tmp"
+  done
+  (( found )) || skip "no fixes are being carried"
+  printf '\n'
+  if (( RC )); then printf '\033[1;31mcheck failed\033[0m\n'; else printf '\033[1;32mcheck passed\033[0m\n'; fi
+  exit $RC
+fi
 
 # Every shell script in the kit, found rather than listed, so one added
 # tomorrow is covered without an edit here.
@@ -65,38 +100,6 @@ if (( ${#TESTS[@]} )); then
   done
 else
   skip "no tests in tests/"
-fi
-
-# What upstream has done to the files the kit patches. Kept out of the default
-# run because it clones, and a gate that needs the network is a gate that fails
-# on a train; the workflow asks for it on a schedule instead.
-if (( PATCHES )); then
-  stage "carried fixes"
-  # shellcheck source=lib/variant.sh
-  . "$ROOT/lib/variant.sh"
-  found=0
-  for label in $(variant_labels); do
-    mapfile -t PATCHFILES < <(find "patches/$label" -name '*.patch' 2>/dev/null | sort)
-    (( ${#PATCHFILES[@]} )) || continue
-    found=1
-    repo=$(variant_field "$label" repo); branch=$(variant_field "$label" branch)
-    tmp=$(mktemp -d)
-    if msg=$(git clone --quiet --depth 1 --branch "$branch" "$repo" "$tmp" 2>&1); then
-      for p in "${PATCHFILES[@]}"; do
-        if msg=$(git -C "$tmp" apply --check "$ROOT/$p" 2>&1); then
-          ok "${p#patches/} applies to $label $branch"
-        else
-          bad "${p#patches/} no longer applies to $label $branch"
-          printf '%s\n' "$msg"
-        fi
-      done
-    else
-      bad "could not clone $repo at $branch"
-      printf '%s\n' "$msg"
-    fi
-    rm -rf "$tmp"
-  done
-  (( found )) || skip "no fixes are being carried"
 fi
 
 printf '\n'
