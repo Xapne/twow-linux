@@ -83,9 +83,10 @@ before the world is stopped for maintenance, and removed afterwards.
 - `./import-world-db.sh`: drops and re-imports turtle_world from
   turtle_world.sql. Only for updates, and always followed by
   `apply-db-updates.sh`.
-- `./apply-db-updates.sh`: applies world migrations from `../src` that the
-  database does not have yet. Required after an import, and after every git pull
-  and rebuild. `--check` counts what is waiting and applies none.
+- `./apply-db-updates.sh`: applies the migrations from `../src` that the
+  databases have not recorded yet, each to the one it belongs to. Required after
+  an import, and after every git pull and rebuild. `--check` counts what is
+  waiting and applies none.
 - `./clear-logs.sh`: empties the logs/ folder.
 
 `../twow.sh doctor` examines an install rather than running one:

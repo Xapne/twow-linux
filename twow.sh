@@ -1036,7 +1036,7 @@ clean_seed_leftovers() {
 }
 
 # -----------------------------------------------------------------------------
-# bring the world DB schema up to what the compiled source expects
+# bring the database schema up to what the compiled source expects
 # -----------------------------------------------------------------------------
 ensure_migrations() {
   [[ -x "$SERVER/apply-db-updates.sh" ]] \
@@ -1158,8 +1158,9 @@ interactive_config() {
 }
 
 # -----------------------------------------------------------------------------
-# Update: pull the latest source, rebuild incrementally, back up the world DB,
-# apply new migrations. Refuses while the world server is running.
+# Update: pull the latest source, rebuild incrementally, back up every database
+# a migration can reach, apply what is new. Refuses while the world server is
+# running.
 # -----------------------------------------------------------------------------
 update_all() {
   [[ -d "$ROOT/src/.git" ]] || die "no source checkout in src/; run: $0 setup"
@@ -1212,13 +1213,25 @@ update_all() {
   say "installed updated binaries into server/bin/"
 
   start_native_db
-  mkdir -p "$SERVER/backups"
-  local backup; backup="$SERVER/backups/turtle_world-$(date +%Y%m%d-%H%M%S)-$after.sql.gz"
-  say "backing up turtle_world before migrations"
-  mariadb-dump -h "$TWOW_DB_HOST" -P "$TWOW_DB_PORT" -u "$TWOW_DB_USER" -p"$TWOW_DB_PASS" \
-      --routines --triggers turtle_world | gzip > "$backup" \
-    || die "backup failed; not touching the database"
-  say "backup: ${backup#"$ROOT"/}"
+  # A migration reaches whichever database its stream belongs to, so the applier
+  # is asked which those are rather than turtle_world being assumed. These keep a
+  # folder of their own: backup mode prunes to the newest BACKUP_KEEP of each
+  # database it names, and a dump taken to make a schema change reversible is not
+  # one of that rotation's to delete.
+  local db backup stamp dbs=(); stamp=$(date +%Y%m%d-%H%M%S)
+  mapfile -t dbs < <("$SERVER/apply-db-updates.sh" --databases)
+  (( ${#dbs[@]} )) \
+    || die "could not read which databases the migrations reach; nothing was touched"
+  mkdir -p "$SERVER/backups/pre-migration"
+  for db in "${dbs[@]}"; do
+    backup="$SERVER/backups/pre-migration/$db-$stamp-$after.sql.gz"
+    say "backing up $db before migrations"
+    mariadb-dump -h "$TWOW_DB_HOST" -P "$TWOW_DB_PORT" -u "$TWOW_DB_USER" -p"$TWOW_DB_PASS" \
+        --routines --triggers "$db" | gzip > "$backup"
+    # The dump is piped, so its own status is what matters, not gzip's.
+    (( PIPESTATUS[0] == 0 )) || { rm -f "$backup"; die "dumping $db failed; not touching the database"; }
+    say "backup: ${backup#"$ROOT"/}"
+  done
   ensure_migrations
 
   say "update complete; start the server with: $0 run"
@@ -1385,12 +1398,12 @@ doctor_database() {
   done
   (( absent )) || dr_ok "all four game databases are present"
 
-  if [[ -x "$SERVER/apply-db-updates.sh" && -d "$ROOT/src/sql/database_updates" ]]; then
+  if [[ -x "$SERVER/apply-db-updates.sh" && -d "$ROOT/src/sql" ]]; then
     if pending=$("$SERVER/apply-db-updates.sh" --check 2>/dev/null) && [[ "$pending" =~ ^[0-9]+$ ]]; then
       if (( pending )); then
-        dr_note "$pending world migration(s) from src/ are not applied yet ($0 update)"
+        dr_note "$pending migration(s) from src/ are not applied yet ($0 update)"
       else
-        dr_ok "world migrations are up to date with src/"
+        dr_ok "the databases are up to date with the migrations in src/"
       fi
     else
       dr_skip "the migration state could not be read"
