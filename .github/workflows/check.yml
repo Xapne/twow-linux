@@ -3,6 +3,12 @@ name: check
 on:
   push:
   pull_request:
+  # The fixes in patches/ are carried against branches that move on their own,
+  # so upstream is asked about them on a schedule rather than only when
+  # somebody pushes here.
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
 
 jobs:
   check:
@@ -18,3 +24,13 @@ jobs:
 
       - name: Run the gate
         run: ./check.sh
+
+  patches:
+    # Clones the cores, so it stays off the push path.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ask upstream whether the carried fixes still apply
+        run: ./check.sh --patches

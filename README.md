@@ -94,7 +94,9 @@ dependency once and every install path picks it up.
   re-applied after every pull
 - `server/` - the converted repack and its day-to-day scripts
 - `check.sh` - shell syntax, shellcheck and the tests in `tests/`, run in one
-  go; `.github/workflows/check.yml` runs the same script on push
+  go; `--patches` adds a question to upstream about the fixes in `patches/`.
+  `.github/workflows/check.yml` runs the same script on push, and weekly with
+  `--patches`
 - `tests/` - assertions over the kit's own functions, no database or terminal
 - `docker/` - the same conversion in a container, for macOS and Windows hosts
 - `setup-native.sh`, `setup-vm.sh` - the former names, standing in until the
