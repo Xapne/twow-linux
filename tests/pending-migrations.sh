@@ -69,13 +69,49 @@ expect "one real error among them is still a failure" "$got" no
 only_already_there "$TMP/err" && got=yes || got=no
 expect "output with no error at all is not this case" "$got" no
 
+# -- what runs before what ----------------------------------------------------
+# Two streams reach the same database and their stamps interleave: the core's
+# own history adds a column and a fix on top of it names that column, so the
+# order that counts is the stamp, not the directory.
+mkdir -p "$TMP/src/sql/database_updates/world" "$TMP/src/sql/seed"
+: > "$TMP/src/sql/database_updates/20260731120000_world.sql"
+: > "$TMP/src/sql/database_updates/world/20260721013813_world.sql"
+: > "$TMP/src/sql/database_updates/world/20260820000000_world.sql"
+: > "$TMP/src/sql/seed/ai_playerbot_texts.sql"
+SRC="$TMP/src"
+# The applier keeps what a database has recorded in a file of its own, which is
+# why the record the stub answers from is a second one.
+APPLIED=$TMP/applied.now
+RECORDED=$TMP/recorded; : > "$RECORDED"
+applied_names() { cat "$RECORDED"; }
+ALL_STREAMS=(
+  "sql/seed|turtle_world|*.sql"
+  "sql/database_updates|turtle_world|*_world.sql"
+  "sql/database_updates/world|turtle_world|*_world.sql"
+)
+expect "the core's own seed goes first, whatever the stamps say" \
+  "$(pending_all | head -1 | cut -d'|' -f4)" ai_playerbot_texts.sql
+expect "then the oldest stamp, from whichever directory holds it" \
+  "$(pending_all | sed -n 2p | cut -d'|' -f4)" 20260721013813_world.sql
+expect "and a fix that names what it added comes after it" \
+  "$(pending_all | sed -n 3p | cut -d'|' -f4)" 20260731120000_world.sql
+expect "every pending file is listed once" "$(pending_all | wc -l)" 4
+expect "each one carries the database and the directory it belongs to" \
+  "$(pending_all | sed -n 2p | cut -d'|' -f2,3)" "turtle_world|sql/database_updates/world"
+printf '%s\n' 20260721013813_world > "$RECORDED"
+expect "what the database recorded is left out" \
+  "$(pending_all | grep -c 20260721013813 || true)" 0
+cd "$TMP" || exit 1
+
 malformed=0
 for stream in "${STREAMS[@]}"; do
   IFS='|' read -r dir db glob <<< "$stream"
   [[ -n "$dir" && -n "$db" && -n "$glob" ]] || malformed=$(( malformed + 1 ))
 done
 expect "every stream declares a directory, a database and a glob" "$malformed" 0
-expect "the world stream is one of them" \
-  "$(printf '%s\n' "${STREAMS[@]}" | grep -c '|turtle_world|')" 1
+# The core keeps its own history in a directory of its own and the fixes on top
+# of it beside them, and both reach the world database.
+expect "the world database is reached by both of its streams" \
+  "$(printf '%s\n' "${STREAMS[@]}" | grep -c '|turtle_world|')" 2
 
 exit $RC

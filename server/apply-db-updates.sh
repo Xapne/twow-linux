@@ -35,6 +35,7 @@ KIT_RERUN="$0"
 # in lib/variant.sh, which is asked for it below.
 STREAMS=(
   "sql/database_updates|turtle_world|*_world.sql"
+  "sql/database_updates/world|turtle_world|*_world.sql"
   "sql/database_updates/character|turtle_char|*_character.sql"
   "sql/character_updates|turtle_char|[0-9]*.sql"
 )
@@ -159,6 +160,26 @@ pending_files() {
   done
 }
 
+# Every pending file of every stream, as stamp|database|directory|file, oldest
+# first. The order is the stamp a file opens with rather than the directory
+# holding it: the streams interleave, and a fix in one names a column another
+# adds. A name carrying no stamp is a core's own seed and sorts ahead of them
+# all, which is where those belong.
+pending_all() {
+  local stream dir db glob f key
+  for stream in "${ALL_STREAMS[@]}"; do
+    IFS='|' read -r dir db glob <<< "$stream"
+    [[ -d "$SRC/$dir" ]] || continue
+    applied_names "$db" > "$APPLIED"
+    cd "$SRC/$dir" || continue
+    while IFS= read -r f; do
+      key=${f%%_*}
+      [[ "$key" =~ ^[0-9]{14}$ ]] || key=00000000000000
+      printf '%s|%s|%s|%s\n' "$key" "$db" "$dir" "$f"
+    done < <(pending_files "$glob" "$APPLIED")
+  done | sort -s -t'|' -k1,1
+}
+
 # run only when executed, not when sourced (keeps the functions testable)
 [[ "${BASH_SOURCE[0]}" == "$0" ]] || return 0
 
@@ -188,64 +209,56 @@ SRC=$(variant_src)
 APPLIED=$(mktemp); trap 'rm -f "$APPLIED"' EXIT
 TOTAL=0
 
-# Applies one stream, or counts it and applies none, adding what it found to
-# TOTAL. A stream the branch in src/ does not carry is not an error: the streams
-# differ between branches, which is the whole reason each database records what
-# it has seen by name.
-# $1 directory, $2 database, $3 glob
-run_stream() {
-  local dir=$1 db=$2 glob=$3 f name err hash status n=0
-  [[ -d "$SRC/$dir" ]] || return 0
-  cd "$SRC/$dir"
-
-  if [ "$CHECK" = 1 ]; then
-    applied_names "$db" > "$APPLIED"
-    TOTAL=$(( TOTAL + $(pending_files "$glob" "$APPLIED" | wc -l) ))
-    return 0
+# Applies one file and records it by name, or says what went wrong and stops.
+# A collision with the imported dump is settled as an upsert, and structure the
+# database already has counts as applied.
+# $1 database, $2 directory under the source, $3 file
+apply_file() {
+  local db=$1 dir=$2 f=$3 name err hash status
+  cd "$SRC/$dir" || die "the source lost $dir while it was being applied"
+  name="${f%.sql}"
+  err=$(mktemp)
+  if DB "$db" < "$f" 2>"$err"; then
+    status=ok
+  elif grep -q 'Duplicate entry' "$err" \
+       && to_upsert < "$f" | DB "$db" 2>"$err"; then
+    status="ok (upsert)"
+  elif already_there "$db" "$f" "$err"; then
+    status="ok (already there)"
+  else
+    # The client echoes the offending statement ahead of the error, so the
+    # first lines are the statement and the ERROR line is what has to surface.
+    echo "FAILED $name:"
+    grep -m3 -E '^ERROR' "$err" || head -5 "$err"
+    mkdir -p "$SERVER/logs" && cp -f "$err" "$SERVER/logs/migration-$name.err" 2>/dev/null \
+      && echo "full output: server/logs/migration-$name.err"
+    rm -f "$err"; exit 1
   fi
-
-  ensure_migration_table "$db" >/dev/null 2>&1 \
-    || die "could not reach the migrations table in $db; is the database up?"
-  applied_names "$db" > "$APPLIED"
-
-  while IFS= read -r f; do
-    (( n )) || echo "$db: applying from $dir"
-    name="${f%.sql}"
-    err=$(mktemp)
-    if DB "$db" < "$f" 2>"$err"; then
-      status=ok
-    elif grep -q 'Duplicate entry' "$err" \
-         && to_upsert < "$f" | DB "$db" 2>"$err"; then
-      status="ok (upsert)"
-    elif already_there "$db" "$f" "$err"; then
-      status="ok (already there)"
-    else
-      # The client echoes the offending statement ahead of the error, so the
-      # first lines are the statement and the ERROR line is what has to surface.
-      echo "FAILED $name:"
-      grep -m3 -E '^ERROR' "$err" || head -5 "$err"
-      mkdir -p "$SERVER/logs" && cp -f "$err" "$SERVER/logs/migration-$name.err" 2>/dev/null \
-        && echo "full output: server/logs/migration-$name.err"
-      rm -f "$err"; exit 1
-    fi
-    rm -f "$err"
-    hash=$(sha1sum "$f" | awk '{print toupper($1)}')
-    DB -e "INSERT INTO \`$db\`.migrations (Name, Hash, AppliedAt) VALUES ('$name', '$hash', NOW());"
-    echo "$status  $name"
-    n=$(( n + 1 ))
-  done < <(pending_files "$glob" "$APPLIED")
-  TOTAL=$(( TOTAL + n ))
+  rm -f "$err"
+  hash=$(sha1sum "$f" | awk '{print toupper($1)}')
+  DB -e "INSERT INTO \`$db\`.migrations (Name, Hash, AppliedAt) VALUES ('$name', '$hash', NOW());"
+  echo "$status  $name"
 }
 
-for stream in "${ALL_STREAMS[@]}"; do
-  IFS='|' read -r dir db glob <<< "$stream"
-  run_stream "$dir" "$db" "$glob"
-done
-
-# --check is what the doctor mode asks, so the rule for what is pending lives
-# here beside the applier, and answers for every stream in one number.
 if [ "$CHECK" = 1 ]; then
-  echo "$TOTAL"
+  pending_all | wc -l
   exit 0
 fi
+
+# The table both cores record into has to exist before anything is applied, and
+# a stream may be the first thing its database ever saw.
+for stream in "${ALL_STREAMS[@]}"; do
+  IFS='|' read -r dir db glob <<< "$stream"
+  ensure_migration_table "$db" >/dev/null 2>&1 \
+    || die "could not reach the migrations table in $db; is the database up?"
+done
+
+LAST=""
+while IFS='|' read -r key db dir f; do
+  [[ "$db: applying from $dir" == "$LAST" ]] || {
+    LAST="$db: applying from $dir"; echo "$LAST"; }
+  apply_file "$db" "$dir" "$f"
+  TOTAL=$(( TOTAL + 1 ))
+done < <(pending_all)
+
 echo "Done. $TOTAL migration(s) applied."
