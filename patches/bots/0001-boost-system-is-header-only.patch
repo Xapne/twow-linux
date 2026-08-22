@@ -1,0 +1,36 @@
+Boost.System has been header-only since 1.69, and Boost 1.91 ships neither the
+library nor a boost_system CMake component, so a REQUIRED find_package naming it
+leaves the bots core unconfigurable. Only thread and filesystem are compiled,
+which is what this leaves it asking for.
+
+Carried here until the fork drops it upstream; the kit re-applies it after
+every pull and says so when it no longer fits.
+
+diff --git a/src/modules/PlayerBots/CMakeLists.txt b/src/modules/PlayerBots/CMakeLists.txt
+index 43b5000..1b4cf30 100644
+--- a/src/modules/PlayerBots/CMakeLists.txt
++++ b/src/modules/PlayerBots/CMakeLists.txt
+@@ -192,21 +192,19 @@ if(WIN32)
+   # and two of them, filesystem and thread, are compiled rather than
+   # header-only. Windows linked neither, which would have failed at link time
+   # once the headers were finally found.
+-  find_package(Boost 1.70 REQUIRED COMPONENTS thread filesystem system)
++  find_package(Boost 1.70 REQUIRED COMPONENTS thread filesystem)
+   target_link_libraries(${LIBRARY_NAME}
+     PRIVATE zlib
+     PRIVATE ws2_32
+     PRIVATE Boost::thread
+     PRIVATE Boost::filesystem
+-    PRIVATE Boost::system
+   )
+ else()
+-  find_package(Boost 1.70 REQUIRED COMPONENTS thread filesystem system)
++  find_package(Boost 1.70 REQUIRED COMPONENTS thread filesystem)
+   target_link_libraries(${LIBRARY_NAME}
+     PRIVATE ZLIB::ZLIB
+     PRIVATE Boost::thread
+     PRIVATE Boost::filesystem
+-    PRIVATE Boost::system
+   )
+ endif()
+ 

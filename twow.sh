@@ -9,8 +9,8 @@
 # Layout it expects (and creates) under the folder this script lives in:
 #   server/   the repack (from TurtleWoW_1.18.zip), native db in server/db
 #   client/   the 1.18.1 game client (only needed to play, not to convert)
-#   src/      Penqle/tortoise-wow source, branch 1181dev
-#   build/    native build tree
+#   src/      core source, one checkout per core (see lib/variant.sh)
+#   build/    native build tree, one per core
 #   deps/     locally built ACE library, where the distro packages none
 #   lib/      terminal prompts shared with twow-vm.sh
 #
@@ -30,13 +30,16 @@ SERVER="$ROOT/server"
 # script shares with the scripts in server/. Both used to carry a copy.
 # shellcheck source=lib/kit.sh
 . "$ROOT/lib/kit.sh"
+# Which core this install runs: its repository, branch, build options, extra
+# dependency, config and seed tables. Everything below asks this rather than
+# naming a fork.
+# shellcheck source=lib/variant.sh
+. "$ROOT/lib/variant.sh"
 # Overrides the compile job count worked out below, for a machine the
 # measurement no longer fits.
 TWOW_BUILD_JOBS=${TWOW_BUILD_JOBS:-}
 export TWOW_BUILD_JOBS
 ACE_VER=8.0.3
-BRANCH=1181dev
-REPO=https://github.com/Penqle/tortoise-wow.git
 
 # =============================================================================
 # Dependencies: the single source of truth
@@ -56,6 +59,8 @@ REPO=https://github.com/Penqle/tortoise-wow.git
 #             ace      a system ACE >= $ACE_MIN_MAJOR
 #   3 target  what is checked, space separated; empty where the kind knows
 #   4 tier    required  missing stops the run
+#             variant   required only for the core that claims it in
+#                       lib/variant.sh, which is the only place that says so
 #             optional  missing only costs build time
 #             seed      needed once, for the initial database seed
 #             console   missing leaves the world console in its own terminal
@@ -76,6 +81,7 @@ DEPS=(
   "OpenSSL headers|header|openssl/ssl.h|required|libssl-dev|openssl-devel|libopenssl-devel|openssl"
   "ZLIB headers|header|zlib.h|required|zlib1g-dev|zlib-devel|zlib-devel|zlib"
   "ACE library|ace||optional|libace-dev|-|-|-"
+  "Boost|header|boost/thread.hpp boost/filesystem.hpp|variant|libboost-thread-dev libboost-filesystem-dev libboost-system-dev|boost-devel|libboost_thread-devel libboost_filesystem-devel libboost_system-devel|boost"
   "wine|cmd|wine|seed|wine|wine|wine|wine"
   "tmux|cmd|tmux|console|tmux|tmux|tmux|tmux"
 )
@@ -134,7 +140,10 @@ dep_pkg_of() {
 }
 
 # Every package for this distro, in table order, deduplicated. This is what
-# twow-vm.sh provisions its guest with.
+# twow-vm.sh provisions its guest with, and what the container image installs.
+# A dependency only one core needs is in here too: a guest or an image is built
+# before anyone has said which core it will run, and the package costs less than
+# the failed compile twenty minutes into a switch.
 dep_packages() {
   local row one out=() seen=" " d_label d_kind d_target d_tier d_deb d_fed d_suse d_arch d_pkg
   for row in "${DEPS[@]}"; do
@@ -174,6 +183,7 @@ check_deps() {
     dep_present "$d_kind" "$d_target" && continue
     case "$d_tier" in
       required) missing+=("$d_label ($d_pkg)") ;;
+      variant)  variant_needs_dep "$d_label" && missing+=("$d_label ($d_pkg), for the $(variant_active) core") ;;
       optional) ace_built || later+=("no system ACE; it gets built from source here, which costs
   a few minutes on the first run. Skip that with: $INSTALL $d_pkg") ;;
       seed)     seeded || later+=("the one-time database seed further down needs wine,
@@ -207,6 +217,8 @@ deps_report() {
     dep_parse "$row"
     if [[ "$d_pkg" == "-" ]]; then
       mark="${C_GRAY}-${C_RST}"; d_pkg="not packaged on this distro, handled by the script"
+    elif [[ "$d_tier" == variant ]] && ! variant_needs_dep "$d_label"; then
+      mark="${C_GRAY}-${C_RST}"; d_tier="$(variant_claiming_dep "$d_label") only"
     elif dep_present "$d_kind" "$d_target"; then
       mark="${C_GREEN}✓${C_RST}"
     else
@@ -258,10 +270,36 @@ ensure_mapdata() {
 # source checkout
 # -----------------------------------------------------------------------------
 ensure_source() {
-  if [[ -f "$ROOT/src/CMakeLists.txt" ]]; then say "source already in src/"; return; fi
-  say "cloning $REPO ($BRANCH)"
-  git clone --depth 1 --branch "$BRANCH" "$REPO" "$ROOT/src" \
-    || die "git clone failed. Check network access and that branch '$BRANCH' still exists."
+  local v src repo branch
+  v=$(variant_active); src=$(variant_src)
+  variant_migrate_legacy \
+    || die "could not move the existing checkout to src/stock; move it by hand and re-run"
+  if [[ -f "$src/CMakeLists.txt" ]]; then
+    say "$v source already in ${src#"$ROOT"/}"
+  else
+    repo=$(variant_field "$v" repo); branch=$(variant_field "$v" branch)
+    say "cloning $repo ($branch)"
+    mkdir -p "$ROOT/src"
+    git clone --depth 1 --branch "$branch" "$repo" "$src" \
+      || die "git clone failed. Check network access and that branch '$branch' still exists."
+  fi
+  apply_source_patches
+}
+
+# The kit's own fixes for this core, re-applied on every run so a checkout made
+# by an older kit picks up one added since. A patch that fits neither way is
+# named and let go: upstream has changed underneath it, and the build either no
+# longer needs it or fails loudly enough to say so.
+apply_source_patches() {
+  local stale
+  stale=$(variant_apply_patches) && return 0
+  local p
+  while IFS= read -r p; do
+    [[ -n "$p" ]] || continue
+    warn "the fix in ${p#"$ROOT"/} no longer fits this source and was left out;
+  if the build fails on it, the fix has to be brought forward"
+  done <<< "$stale"
+  return 0
 }
 
 # -----------------------------------------------------------------------------
@@ -418,23 +456,34 @@ ensure_ace() {
 # -----------------------------------------------------------------------------
 # build realmd + mangosd, install into server/bin
 # -----------------------------------------------------------------------------
+# The binaries in server/bin are asked what they are rather than trusted to be
+# what variant.env says: a switch that stopped halfway through is the case where
+# the two disagree, and the answer decides whether this compiles or skips.
 ensure_binaries() {
-  if [[ -x "$SERVER/bin/mangosd" && -x "$SERVER/bin/realmd" ]]; then
-    say "native binaries already in server/bin/"; return
+  local v build src flags=()
+  v=$(variant_active); build=$(variant_build); src=$(variant_src)
+  if [[ -x "$SERVER/bin/mangosd" && -x "$SERVER/bin/realmd" \
+        && "$(variant_binary_label)" == "$v" ]]; then
+    say "native $v binaries already in server/bin/"; variant_save "$v"; return
   fi
-  say "configuring and compiling the server (10-20 min on first run)"
-  cmake -B "$ROOT/build" -S "$ROOT/src" -GNinja \
-    -DCMAKE_BUILD_TYPE=Release -DDEBUG_SYMBOLS=OFF > "$ROOT/build-configure.log" 2>&1 \
-    || die "cmake configure failed, see $ROOT/build-configure.log"
+  say "configuring and compiling the $v server (10-20 min on first run)"
+  mkdir -p "$build"
+  read -ra flags <<< "$(variant_field "$v" cmake)"
+  cmake -B "$build" -S "$src" -GNinja \
+    -DCMAKE_BUILD_TYPE=Release -DDEBUG_SYMBOLS=OFF "${flags[@]}" > "$build/configure.log" 2>&1 \
+    || die "cmake configure failed, see ${build#"$ROOT"/}/configure.log"
   local jobs; jobs=$(build_jobs)
   [[ -n "$jobs" ]] && say "holding the compile to $jobs job(s) to stay inside this cgroup's limits"
   local oom_before; oom_before=$(oom_kills)
-  if ! ninja -C "$ROOT/build" ${jobs:+-j"$jobs"} mangosd realmd; then
+  if ! ninja -C "$build" ${jobs:+-j"$jobs"} mangosd realmd; then
     (( $(oom_kills) > oom_before )) && die_out_of_memory "$jobs" "$(mem_limit)"
     die "compile failed. Scroll up for the first error; report it on the tortoise-wow GitHub."
   fi
-  install_binaries "$ROOT/build/src/mangosd/mangosd" "$ROOT/build/src/realmd/realmd"
-  say "installed native mangosd and realmd"
+  install_binaries "$build/src/mangosd/mangosd" "$build/src/realmd/realmd"
+  # Written where the binaries are, so what this install says it runs and what
+  # server/bin actually holds are settled in the same breath.
+  variant_save "$v"
+  say "installed native $v mangosd and realmd"
 }
 
 # -----------------------------------------------------------------------------
@@ -466,6 +515,15 @@ fix_configs() {
   # console under every statement the core runs. Errors only here; the log file
   # keeps its own detail through LogFileLevel, and 'run <level>' overrides it.
   set_console_level 1
+  # A core that brings a config the repack never shipped gets it put where it
+  # looks for it, on every run rather than only on a switch: a container or a
+  # scripted install never passes through 'bots on' at all. An existing file
+  # keeps the count it was given.
+  if [[ -n "$(variant_field "$(variant_active)" conf)" ]]; then
+    local n; n=$(bot_count 2>/dev/null) || n=""
+    [[ "$n" =~ ^[0-9]+$ ]] || n=$VARIANT_BOTS_DEFAULT
+    ensure_bot_conf "$n"
+  fi
   write_db_env
   say "configs checked (database $TWOW_DB_HOST:$TWOW_DB_PORT, DataDir lowercase)"
 }
@@ -672,6 +730,9 @@ first_run_questions() {
   [[ "$addr" == 127.0.0.1 && "$bind" == 127.0.0.1 ]] && offer_realm_address "$addr"
   offer_broadcast
   has_own_gm || make_gm_account
+  # Last of the questions: answering yes compiles the other core, and a compile
+  # that fails should not take the game master account down with it.
+  offer_bots
 }
 
 # Whether a game master account already exists. The repack's own pair is deleted
@@ -1144,6 +1205,15 @@ interactive_config() {
   ui_num "Starting level for new characters" "$(conf_get "$M" StartPlayerLevel)"
   conf_set "$M" StartPlayerLevel "$ANSWER"
 
+  # The cohort size is a setting like the rest once bots are on; turning them on
+  # is a compile, which is not something a form should start.
+  if [[ "$(variant_active)" == bots && -f "$BOT_CONF" ]]; then
+    ui_num "AI players the realm asks for" "$(bot_count)"
+    set_bot_count "${ANSWER%%.*}"
+  else
+    ui_note "'$0 bots on' populates the world with AI players"
+  fi
+
   # The realm address may have moved just now, and the client follows it.
   sync_client_realmlist
   if (( ${#CHANGES[@]} )); then
@@ -1158,13 +1228,240 @@ interactive_config() {
 }
 
 # -----------------------------------------------------------------------------
-# Update: pull the latest source, rebuild incrementally, back up every database
-# a migration can reach, apply what is new. Refuses while the world server is
-# running.
+# AI players: the other core, and the cohort it keeps
 # -----------------------------------------------------------------------------
-update_all() {
-  [[ -d "$ROOT/src/.git" ]] || die "no source checkout in src/; run: $0 setup"
+# One command decides which core this install runs, because populating the world
+# is the only thing anyone wants from it; which fork, branch, build option and
+# dependency that means is lib/variant.sh's business and is named nowhere else.
+# A switch never touches accounts or characters: the databases either core reads
+# differently are the world's, and the bots' own tables are seeded once and left
+# alone from then on.
+BOT_CONF="$SERVER/bin/aiplayerbot.conf"
+
+# The bot config the repack never shipped. A build generates one beside the
+# module; the source's own copy stands in where a build tree has been cleared.
+bot_conf_dist() {
+  local b s
+  b="$(variant_build)/src/modules/PlayerBots/aiplayerbot.conf.dist"
+  s="$(variant_src)/src/modules/PlayerBots/playerbot/aiplayerbot.conf.dist.in"
+  [[ -f "$b" ]] && { printf '%s' "$b"; return 0; }
+  [[ -f "$s" ]] && { printf '%s' "$s"; return 0; }
+  return 1
+}
+
+# What the config asks for, and what the realm holds. The two differ while a
+# cohort is still being built, which is why both are reported.
+bot_count()  { conf_get "$BOT_CONF" AiPlayerbot.MinRandomBots 2>/dev/null; }
+bot_prefix() {
+  local p; p=$(conf_get "$BOT_CONF" AiPlayerbot.RandomBotAccountPrefix 2>/dev/null)
+  printf '%s' "${p:-RNDBOT}"
+}
+bot_cohort() {
+  DB -N -B -e "SELECT COUNT(*) FROM turtle_logon.account
+     WHERE username LIKE '$(bot_prefix)%'" 2>/dev/null
+}
+
+# Puts the bot config where the core looks for it, which is beside mangosd.conf,
+# and settles the three keys that decide what a boot does. The shipped file asks
+# for a thousand bots, and for one boot in ten thousand to wipe the cohort and
+# build it again.
+ensure_bot_conf() {  # $1 how many bots
+  local dist
+  if [[ ! -f "$BOT_CONF" ]]; then
+    dist=$(bot_conf_dist) || die "the bots source carries no aiplayerbot.conf to copy;
+  re-run '$0 bots on' once the source is in place"
+    cp "$dist" "$BOT_CONF" || die "could not write $BOT_CONF"
+    say "aiplayerbot.conf placed beside mangosd.conf, where the core looks for it"
+  fi
+  conf_set "$BOT_CONF" AiPlayerbot.Enabled 1
+  set_bot_count "$1"
+  # One boot with this set wipes the cohort and creates it again. That is a
+  # reset somebody asks for by hand, never what a switch leaves behind.
+  conf_set "$BOT_CONF" AiPlayerbot.DeleteRandomBotAccounts 0
+}
+
+# Both ends of the range move together: a range would have the core create bots
+# up to the top of it and log in as few as the bottom, which reads as the count
+# being ignored.
+set_bot_count() {  # $1 how many
+  conf_set "$BOT_CONF" AiPlayerbot.MinRandomBots "$1"
+  conf_set "$BOT_CONF" AiPlayerbot.MaxRandomBots "$1"
+}
+
+# The number is asked rather than assumed: it decides how long the next boot
+# takes and how much of every character backup is bots. Answers land in
+# BOT_COUNT, since the prompts are drawn on stdout and a captured call would
+# swallow the screen.
+ask_bot_count() {
+  BOT_COUNT=$(bot_count 2>/dev/null) || BOT_COUNT=""
+  [[ "$BOT_COUNT" =~ ^[0-9]+$ ]] || BOT_COUNT=$VARIANT_BOTS_DEFAULT
+  [[ -t 0 ]] || return 0
+  ui_intro "how many"
+  ui_note "each bot is a character that levels, quests, groups and trades"
+  ui_note "the first boot builds their caches, which takes longer the more there are"
+  ui_num "How many bots?" "$BOT_COUNT"
+  BOT_COUNT=${ANSWER%%.*}
+  ui_outro "$BOT_COUNT bots"
+}
+
+# Which core is running, whether server/bin agrees, and what changing costs.
+bots_report() {
+  local v built other want n
+  v=$(variant_active)
+  built=$(variant_binary_label) || built=""
+  if [[ "$v" == bots ]]; then say "on - $(variant_field bots summary)"
+  else say "off - $(variant_field stock summary)"; fi
+  if [[ -n "$built" && "$built" != "$v" ]]; then
+    warn "server/bin holds a $built build, so this install is mid-switch;
+  finish it with: $0 bots $([[ "$v" == bots ]] && echo on || echo off)"
+  fi
+  if [[ "$v" == bots && -f "$BOT_CONF" ]]; then
+    want=$(bot_count); n=$(bot_cohort) || n=""
+    say "cohort    $want asked for in aiplayerbot.conf${n:+, $n in the realm now}"
+  fi
+  other=bots; [[ "$v" == bots ]] && other=stock
+  if [[ -d "$(TWOW_VARIANT=$other variant_src)" && -d "$(TWOW_VARIANT=$other variant_build)" ]]; then
+    say "$0 bots $([[ "$other" == bots ]] && echo on || echo off) switches in a minute; the $other tree is still here"
+  else
+    say "$0 bots $([[ "$other" == bots ]] && echo on || echo off) clones and compiles that core once, 10-20 minutes"
+  fi
+  return 0
+}
+
+# Switching is the same work setup does, aimed at the other core: check what it
+# needs before an hour of compiling, build it, and only then write down which
+# core this install runs, so a switch that fails partway leaves a record that
+# still matches the binaries in server/bin.
+bots_switch() {  # $1 target label, $2.. options
+  local target=$1 count=""; shift
+  while (( $# )); do
+    case "$1" in
+      --count) [[ "${2:-}" =~ ^[0-9]+$ ]] || die "--count needs a number"
+               count=$2; shift 2 ;;
+      *)       die "unknown option '$1'; bots takes --count <number>" ;;
+    esac
+  done
   [[ -x "$SERVER/bin/mangosd" ]] || die "not converted yet; run: $0 setup"
+  assert_servers_stopped
+
+  export TWOW_VARIANT="$target"
+  say "switching to the $target core; accounts and characters are not touched"
+  check_deps
+  ensure_source
+  ensure_ace
+  ensure_binaries
+
+  if [[ "$target" == bots ]]; then
+    if [[ -n "$count" ]]; then BOT_COUNT=$count; else ask_bot_count; fi
+    ensure_bot_conf "$BOT_COUNT"
+  fi
+
+  start_native_db
+  ensure_db_credentials
+  assert_own_database
+  backup_before_migrations "$target"
+  ensure_migrations
+  [[ "$target" == stock ]] && offer_bot_purge
+
+  say "this install now runs the $target core; start it with: $0 run"
+  [[ "$target" == bots ]] \
+    && say "the first boot builds the bots' caches and creates them, which takes a few minutes"
+  return 0
+}
+
+# Bots left behind after a switch back are characters like any other: they log
+# in nowhere, they sit in every character backup, and the stock core has no idea
+# what they are. Clearing them is the same sweep the repack's own accounts get.
+offer_bot_purge() {
+  local n prefix
+  prefix=$(bot_prefix)
+  n=$(bot_cohort) || return 0
+  [[ "$n" =~ ^[0-9]+$ ]] && (( n > 0 )) || return 0
+  # Removing characters is answered for, never assumed: a run with no terminal
+  # keeps them and says how they go.
+  if [[ ! -t 0 ]]; then
+    say "$n bot account(s) stay in the realm; '$0 bots off' from a terminal offers to clear them"
+    return 0
+  fi
+  ui_intro "$n bot account(s) are still in the realm"
+  ui_note "they belong to the other core; here they are characters nobody plays"
+  ui_note "keeping them costs a slower backup, and they come back the moment bots are on again"
+  ui_select "Remove them?" 0 \
+    "Yes, remove the bots and their characters" \
+    "No, leave them where they are"
+  if (( ANSWER == 1 )); then ui_outro "left in place"; return 0; fi
+  sweep_accounts "username LIKE '$prefix%'" \
+    || { ui_outro "the sweep failed; the bots are still there"; return 0; }
+  ui_outro "removed $n bot account(s) and everything filed under them"
+  return 0
+}
+
+# Packages the bots core needs and this system has not got. Tier and claim both
+# come from the tables, so a second dependency for that core needs nothing here.
+bots_deps_missing() {
+  local row out=() d_label d_kind d_target d_tier d_deb d_fed d_suse d_arch d_pkg
+  for row in "${DEPS[@]}"; do
+    dep_parse "$row"
+    [[ "$d_tier" == variant && " $(variant_claiming_dep "$d_label") " == *" bots "* ]] || continue
+    dep_present "$d_kind" "$d_target" || out+=("$d_pkg")
+  done
+  printf '%s' "${out[*]}"
+}
+
+# Asked once, during the first setup, in the same breath as the realm name and
+# the broadcast. Answering no is a keypress and is never asked again.
+offer_bots() {
+  [[ "$(variant_active)" == stock ]] || return 0
+  # A question whose yes ends in a missing header twenty minutes later is worse
+  # than no question: the packages are named instead, and the mode stays open.
+  local absent; absent=$(bots_deps_missing)
+  if [[ -n "$absent" ]]; then
+    warn "AI players need $absent, which this system has not got.
+  Install it and they are one command away: $INSTALL $absent
+  then: $0 bots on"
+    return 0
+  fi
+  ui_intro "AI players"
+  ui_note "a cohort of bots that level, quest, group and trade, so the world is not empty"
+  ui_note "they run on a fork of the core, which is compiled once: 10-20 minutes"
+  ui_select "Populate the world with AI players?" 0 \
+    "No, just me and whoever I invite" \
+    "Yes, add AI players"
+  if (( ANSWER == 0 )); then
+    ui_outro "no bots; '$0 bots on' adds them whenever"
+    return 0
+  fi
+  ui_outro "switching to the core that carries them"
+  bots_switch bots
+}
+
+# A migration reaches whichever database its stream belongs to, so the applier is
+# asked which those are rather than turtle_world being assumed. These dumps keep
+# a folder of their own: backup mode prunes to the newest BACKUP_KEEP of each
+# database it names, and a dump taken to make a schema change reversible is not
+# one of that rotation's to delete.
+# $1 what to name them after, a commit or the core being switched to
+backup_before_migrations() {
+  local db backup stamp dbs=(); stamp=$(date +%Y%m%d-%H%M%S)
+  mapfile -t dbs < <("$SERVER/apply-db-updates.sh" --databases)
+  (( ${#dbs[@]} )) \
+    || die "could not read which databases the migrations reach; nothing was touched"
+  mkdir -p "$SERVER/backups/pre-migration"
+  for db in "${dbs[@]}"; do
+    backup="$SERVER/backups/pre-migration/$db-$stamp-$1.sql.gz"
+    say "backing up $db before migrations"
+    mariadb-dump -h "$TWOW_DB_HOST" -P "$TWOW_DB_PORT" -u "$TWOW_DB_USER" -p"$TWOW_DB_PASS" \
+        --routines --triggers "$db" | gzip > "$backup"
+    # The dump is piped, so its own status is what matters, not gzip's.
+    (( PIPESTATUS[0] == 0 )) || { rm -f "$backup"; die "dumping $db failed; not touching the database"; }
+    say "backup: ${backup#"$ROOT"/}"
+  done
+}
+
+# Replacing binaries or schema under a running world is what update and a core
+# switch both have to refuse; realmd holds no state and is only in the way, so
+# it is stopped rather than complained about.
+assert_servers_stopped() {
   if world_running; then
     service_active && die "the world server is running as a service; stop it first:
   systemctl --user stop twow      (start it again after: systemctl --user start twow)
@@ -1180,13 +1477,33 @@ update_all() {
     sleep 1
     say "stopped realmd (a running binary cannot be replaced)"
   fi
+}
 
-  say "pulling latest $BRANCH source"
+# -----------------------------------------------------------------------------
+# Update: pull the latest source, rebuild incrementally, back up every database
+# a migration can reach, apply what is new. Refuses while the world server is
+# running.
+# -----------------------------------------------------------------------------
+update_all() {
+  local v src build; v=$(variant_active); src=$(variant_src); build=$(variant_build)
+  [[ -d "$src/.git" ]] || die "no source checkout in ${src#"$ROOT"/}; run: $0 setup"
+  [[ -x "$SERVER/bin/mangosd" ]] || die "not converted yet; run: $0 setup"
+  assert_servers_stopped
+
+  say "pulling latest $(variant_field "$v" branch) source for the $v core"
   local before after
-  before=$(git -C "$ROOT/src" rev-parse --short HEAD)
-  git -C "$ROOT/src" pull --ff-only \
-    || die "git pull failed (local changes in src/? no network?); nothing was touched"
-  after=$(git -C "$ROOT/src" rev-parse --short HEAD)
+  before=$(git -C "$src" rev-parse --short HEAD)
+  # The kit's own fixes come out before the pull and go back after it, so a
+  # fast-forward is refused for local edits and never for these.
+  variant_unapply_patches
+  if ! git -C "$src" pull --ff-only; then
+    # The checkout goes back to what it was, fixes and all, since nothing else
+    # in this run will put them back.
+    apply_source_patches
+    die "git pull failed (local changes in ${src#"$ROOT"/}? no network?); nothing was touched"
+  fi
+  after=$(git -C "$src" rev-parse --short HEAD)
+  apply_source_patches
   if [[ "$before" == "$after" ]]; then
     say "source already at $after; still checking build and migrations"
   else
@@ -1197,41 +1514,25 @@ update_all() {
   # ninja re-runs cmake itself when the source's build files changed, and that
   # re-run needs the same ACE in the environment as the first configure
   select_ace
-  [[ -f "$ROOT/build/build.ninja" ]] \
-    || cmake -B "$ROOT/build" -S "$ROOT/src" -GNinja \
-         -DCMAKE_BUILD_TYPE=Release -DDEBUG_SYMBOLS=OFF > "$ROOT/build-configure.log" 2>&1 \
-    || die "cmake configure failed, see $ROOT/build-configure.log"
+  local flags=(); read -ra flags <<< "$(variant_field "$v" cmake)"
+  mkdir -p "$build"
+  [[ -f "$build/build.ninja" ]] \
+    || cmake -B "$build" -S "$src" -GNinja \
+         -DCMAKE_BUILD_TYPE=Release -DDEBUG_SYMBOLS=OFF "${flags[@]}" > "$build/configure.log" 2>&1 \
+    || die "cmake configure failed, see ${build#"$ROOT"/}/configure.log"
   local jobs; jobs=$(build_jobs)
   [[ -n "$jobs" ]] && say "holding the compile to $jobs job(s) to stay inside this cgroup's limits"
   local oom_before; oom_before=$(oom_kills)
-  if ! ninja -C "$ROOT/build" ${jobs:+-j"$jobs"} mangosd realmd; then
+  if ! ninja -C "$build" ${jobs:+-j"$jobs"} mangosd realmd; then
     (( $(oom_kills) > oom_before )) && die_out_of_memory "$jobs" "$(mem_limit)"
     die "compile failed; the installed binaries were not touched.
   Fix the error above or report it on the tortoise-wow GitHub."
   fi
-  install_binaries "$ROOT/build/src/mangosd/mangosd" "$ROOT/build/src/realmd/realmd"
+  install_binaries "$build/src/mangosd/mangosd" "$build/src/realmd/realmd"
   say "installed updated binaries into server/bin/"
 
   start_native_db
-  # A migration reaches whichever database its stream belongs to, so the applier
-  # is asked which those are rather than turtle_world being assumed. These keep a
-  # folder of their own: backup mode prunes to the newest BACKUP_KEEP of each
-  # database it names, and a dump taken to make a schema change reversible is not
-  # one of that rotation's to delete.
-  local db backup stamp dbs=(); stamp=$(date +%Y%m%d-%H%M%S)
-  mapfile -t dbs < <("$SERVER/apply-db-updates.sh" --databases)
-  (( ${#dbs[@]} )) \
-    || die "could not read which databases the migrations reach; nothing was touched"
-  mkdir -p "$SERVER/backups/pre-migration"
-  for db in "${dbs[@]}"; do
-    backup="$SERVER/backups/pre-migration/$db-$stamp-$after.sql.gz"
-    say "backing up $db before migrations"
-    mariadb-dump -h "$TWOW_DB_HOST" -P "$TWOW_DB_PORT" -u "$TWOW_DB_USER" -p"$TWOW_DB_PASS" \
-        --routines --triggers "$db" | gzip > "$backup"
-    # The dump is piped, so its own status is what matters, not gzip's.
-    (( PIPESTATUS[0] == 0 )) || { rm -f "$backup"; die "dumping $db failed; not touching the database"; }
-    say "backup: ${backup#"$ROOT"/}"
-  done
+  backup_before_migrations "$after"
   ensure_migrations
 
   say "update complete; start the server with: $0 run"
@@ -1314,6 +1615,9 @@ status_all() {
   if [[ -n "$pid" ]]; then say "world     running on $wp (pid $pid)"
   elif world_running; then say "world     starting; not accepting connections yet"
   else warn "world     not running"; fi
+  local v; v=$(variant_active)
+  if [[ "$v" == bots ]]; then say "core      bots ($(bot_cohort 2>/dev/null || echo '?') bot account(s))"
+  else say "core      stock"; fi
   if [[ -f "$SERVICE_UNIT" ]] && command -v systemctl >/dev/null 2>&1; then
     say "service   $(systemctl --user is-active "$SERVICE_NAME" 2>/dev/null || true), $(systemctl --user is-enabled "$SERVICE_NAME" 2>/dev/null || true) at boot"
   fi
@@ -1385,7 +1689,7 @@ dr_db_ready() {
 }
 
 doctor_database() {
-  local db n pending absent=0
+  local db n pending src absent=0
   dr_head "database"
   if ! dr_db_ready; then
     dr_skip "no database answering for this install, so its checks are left out ($0 run)"
@@ -1398,12 +1702,15 @@ doctor_database() {
   done
   (( absent )) || dr_ok "all four game databases are present"
 
-  if [[ -x "$SERVER/apply-db-updates.sh" && -d "$ROOT/src/sql" ]]; then
+  # The migrations live under the checkout of the core this install runs, which
+  # is where the applier looks for them too.
+  src=$(variant_src); src=${src#"$ROOT"/}
+  if [[ -x "$SERVER/apply-db-updates.sh" && -d "$ROOT/$src/sql" ]]; then
     if pending=$("$SERVER/apply-db-updates.sh" --check 2>/dev/null) && [[ "$pending" =~ ^[0-9]+$ ]]; then
       if (( pending )); then
-        dr_note "$pending migration(s) from src/ are not applied yet ($0 update)"
+        dr_note "$pending migration(s) from $src are not applied yet ($0 update)"
       else
-        dr_ok "the databases are up to date with the migrations in src/"
+        dr_ok "the databases are up to date with the migrations in $src"
       fi
     else
       dr_skip "the migration state could not be read"
@@ -1575,9 +1882,57 @@ doctor_service() {
   fi
 }
 
+# The one check that cannot be taken on trust: variant.env says which core this
+# install runs, the binary says what it is, and a switch that stopped halfway is
+# exactly where they disagree.
+doctor_core() {
+  local v built want n
+  v=$(variant_active)
+  dr_head "core"
+  built=$(variant_binary_label) || built=""
+  if [[ -z "$built" ]]; then
+    dr_skip "no world server built yet, so the core is left out"
+    return 0
+  fi
+  if [[ "$built" == "$v" ]]; then
+    dr_ok "runs the $v core, and server/bin holds a $built build"
+  else
+    dr_bad "variant.env says $v, server/bin holds a $built build" \
+      "$0 bots $([[ "$v" == bots ]] && echo on || echo off)"
+  fi
+
+  if [[ "$v" == bots ]]; then
+    if [[ -f "$BOT_CONF" ]]; then
+      dr_ok "aiplayerbot.conf sits beside mangosd.conf, where the core reads it"
+      [[ "$(conf_get "$BOT_CONF" AiPlayerbot.Enabled)" == 1 ]] \
+        || dr_bad "the bot subsystem is built but switched off in aiplayerbot.conf" \
+             "set AiPlayerbot.Enabled = 1"
+      [[ "$(conf_get "$BOT_CONF" AiPlayerbot.DeleteRandomBotAccounts)" == 1 ]] \
+        && dr_bad "DeleteRandomBotAccounts is on, which wipes and rebuilds the cohort every boot" \
+             "set AiPlayerbot.DeleteRandomBotAccounts = 0"
+    else
+      dr_bad "no aiplayerbot.conf beside mangosd.conf, so the bots stay asleep" "$0 bots on"
+    fi
+    if dr_db_ready; then
+      want=$(bot_count); n=$(bot_cohort) || n=0
+      if [[ "$n" =~ ^[0-9]+$ ]] && (( n )); then
+        dr_ok "$n bot account(s) in the realm, $want asked for"
+      else
+        dr_note "no bots in the realm yet; the next boot creates them"
+      fi
+    fi
+  elif dr_db_ready && [[ -f "$BOT_CONF" ]]; then
+    n=$(bot_cohort) || n=0
+    [[ "$n" =~ ^[0-9]+$ ]] && (( n )) \
+      && dr_note "$n bot account(s) from the other core are still here ($0 bots off offers to clear them)"
+  fi
+  return 0
+}
+
 doctor_all() {
   DOC_BAD=0 DOC_NOTE=0
   doctor_install
+  doctor_core
   doctor_database
   doctor_dump
   doctor_reach
@@ -2055,9 +2410,11 @@ This is free software, and you are welcome to redistribute it under the terms
 of the GNU General Public License, version 3 or later. The full text sits in
 LICENSE beside this script, and at <https://www.gnu.org/licenses/gpl-3.0.html>.
 
-The server core is Penqle's tortoise-wow, which keeps its own GPL-2.0-or-later
-terms. The repack, the map data and the game client come from elsewhere and are
-supplied by whoever runs this.
+The server core is tortoise-wow, built here from
+  $(variant_field "$(variant_active)" repo) ($(variant_field "$(variant_active)" branch))
+and keeps its own GPL-2.0-or-later terms. The core that carries AI players
+vendors cmangos/playerbots, under the same terms. The repack, the map data and
+the game client come from elsewhere and are supplied by whoever runs this.
 
 Contact: https://github.com/Xapne/twow-linux/issues or xapne@protonmail.ch
 
@@ -2158,9 +2515,16 @@ ${C_BOLD}Modes:${C_RST}
                  only differs behind a port forward; twow-vm.sh passes
                  0.0.0.0 because qemu's forwards never reach the guest's
                  loopback.${C_RST}
-  ${C_GREEN}update${C_RST}         after upstream changes: pull the latest 1181dev source,
-                 rebuild only what changed, back up the world database,
-                 then apply any new schema migrations.
+  ${C_GREEN}bots${C_RST} [on | off | --count <n>]
+                 populate the world with AI players: bots that level, quest,
+                 group and trade. They run on a fork of the core, which is
+                 compiled once; on and off switch between the two, and each
+                 keeps its own checkout, so switching back is quick.
+                 ${C_DIM}Accounts and characters are never touched. With no
+                 argument it says which core runs and what changing costs.${C_RST}
+  ${C_GREEN}update${C_RST}         after upstream changes: pull the latest source for the core
+                 this install runs, rebuild only what changed, back up every
+                 database a migration reaches, then apply the new ones.
                  ${C_DIM}Refuses while the world server is running; stop it
                  with Ctrl+C in its console first.${C_RST}
   ${C_GREEN}license${C_RST}        this program's warranty and redistribution terms
@@ -2250,6 +2614,32 @@ case "$mode" in
     sync_client_realmlist
     say "realm answers at $2, listening on ${REALM_BIND:-?}"
     say "restart the server to apply: $0 run" ;;
+  bots)
+    KIT_TAG=bots
+    case "${2:-}" in
+      # Reporting starts nothing: the cohort is read if a database happens to be
+      # up, and left unsaid when it is not.
+      "")      resolve_db_port; bots_report ;;
+      on)      resolve_db_port; bots_switch bots "${@:3}" ;;
+      off)     resolve_db_port; bots_switch stock "${@:3}" ;;
+      --count) [[ "$(variant_active)" == bots ]] \
+                 || die "this install runs the stock core; turn bots on first: $0 bots on"
+               [[ -f "$BOT_CONF" ]] || die "no aiplayerbot.conf yet; run: $0 bots on"
+               if [[ -n "${3:-}" ]]; then
+                 [[ "$3" =~ ^[0-9]+$ ]] || die "--count needs a number"
+                 BOT_COUNT=$3
+               else
+                 ask_bot_count
+               fi
+               set_bot_count "$BOT_COUNT"
+               say "the realm asks for $BOT_COUNT bots; restart the server to apply: $0 run"
+               say "the cohort grows or shrinks on the next boot, it is not rebuilt" ;;
+      *) die "usage: $0 bots [on | off | --count <number>]
+  on       switch this install to the core that carries AI players
+  off      switch back to the core the repack is built from
+  --count  how many bots the realm asks for
+  nothing  which core is running, and what changing it costs" ;;
+    esac ;;
   status)  status_all ;;
   doctor)  doctor_all ;;
   console) console_attach ;;

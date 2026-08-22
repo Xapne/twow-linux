@@ -2,8 +2,10 @@
 
 Everything server-side runs natively. No Wine in the server stack.
 
-- `bin/realmd`, `bin/mangosd`: native Linux builds of Penqle's tortoise-wow,
-  branch 1181dev, compiled from `../src` into `../build`. ACE is taken from the
+- `bin/realmd`, `bin/mangosd`: native Linux builds of the core this install
+  runs, compiled from `../src/<core>` into `../build/<core>`. Which core that is
+  is recorded in `variant.env` and set with `../twow.sh bots on|off`; each core
+  keeps its own checkout and build tree, so switching back is a relink. ACE is taken from the
   distribution where a recent enough version is packaged (`../twow.sh
   deps` says whether it is here), and otherwise built into
   `../deps/ACE_wrappers`.
@@ -89,6 +91,10 @@ before the world is stopped for maintenance, and removed afterwards.
   waiting and applies none.
 - `./clear-logs.sh`: empties the logs/ folder.
 
+`bin/aiplayerbot.conf` is present on an install running the bots core, beside
+`mangosd.conf` where the core looks for it. `../twow.sh bots` reports the cohort
+and `bots --count <n>` resizes it.
+
 `../twow.sh doctor` examines an install rather than running one:
 binaries and map data, the game databases and their pending migrations, what
 the repack's dump left behind, whether the realm listens where it advertises,
@@ -101,8 +107,10 @@ and the port and process checks they share with `twow.sh`.
 ## Updating
 
 1. Stop the world server (see above); `twow.sh update` refuses while it is running
-2. `cd ../src && git pull`
-3. `ninja -C ../build mangosd realmd` and copy the two binaries into `bin/`
+2. `cd ../src/<core> && git pull`, the core named in `variant.env`; a pull by
+   hand drops any fix `../patches/<core>` carries, which `twow.sh update` puts
+   back on its own
+3. `ninja -C ../build/<core> mangosd realmd` and copy the two binaries into `bin/`
 4. `./apply-db-updates.sh` (with MySQL running)
 
 ## Notes

@@ -11,6 +11,9 @@
 
 ASKED="" ADDR="" BIND=""
 offer_realm_name()    { :; }
+# Switching cores is a compile; the question is stubbed here and tested where
+# the core lives, in tests/variant.sh.
+offer_bots()          { :; }
 has_own_gm()          { return 0; }
 offer_realm_address() { ASKED=yes; }
 realm_address()       { echo "$ADDR"; }

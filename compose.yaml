@@ -32,6 +32,10 @@ services:
       # The address clients are told to connect to. A container cannot learn
       # the host's, so it is given one here or keeps 127.0.0.1.
       TWOW_REALM_ADDRESS: "${TWOW_REALM_ADDRESS:-}"
+      # Which core to build and run. A container converts without asking
+      # anything, so the one question 'bots' would put to a terminal is
+      # answered here instead.
+      TWOW_VARIANT: "${TWOW_VARIANT:-stock}"
     volumes:
       # Everything a conversion makes: the build, the map data, the database
       # and the characters in it.

@@ -7,6 +7,11 @@ native MariaDB, native `realmd` and `mangosd` compiled from the same source
 the repack is built from (Penqle's tortoise-wow, branch 1181dev). No Wine in
 the server stack. The game client still runs under Wine, as usual.
 
+`./twow.sh bots on` runs the realm on Shyalya's fork of that core instead, which
+adds a cohort of AI players that level, quest, group and trade. Each core keeps
+its own checkout and build tree, so switching between them afterwards is a
+relink and a restart.
+
 Works on any Linux distro: the dependency check names the right packages
 for Debian/Ubuntu, Fedora, openSUSE and Arch, and finds the MariaDB daemon
 wherever your distro keeps it. Tested on Arch, Debian 13, and Debian 12 in a
@@ -44,6 +49,7 @@ end to end.
 | Map data | `data.zip`, 1,246,273,520 bytes |
 | Client | `1.18.1-7272-Hotfix-2026-04-12` |
 | Core source | Penqle/tortoise-wow, branch `1181dev`, at `b6b0e3d` |
+| Core source, with AI players | Shyalya/tortoise-wow, branch `playerbots-integration-gh` |
 
 `./twow.sh doctor` checks an install against what this conversion knows, which
 is the first thing to run when a newer repack appears.
@@ -81,6 +87,11 @@ dependency once and every install path picks it up.
 - `lib/ui.sh` - the terminal prompts and palette both scripts draw with
 - `lib/kit.sh` - logging, the database handle and the port, process and config
   checks every script here shares
+- `lib/variant.sh` - the table of cores an install can run, and everything that
+  follows from a row of it: repository, branch, build option, dependency, config
+  file and the tables that core seeds
+- `patches/` - fixes the kit carries for a core until they land upstream,
+  re-applied after every pull
 - `server/` - the converted repack and its day-to-day scripts
 - `check.sh` - shell syntax, shellcheck and the tests in `tests/`, run in one
   go; `.github/workflows/check.yml` runs the same script on push
@@ -195,6 +206,25 @@ the world database, and applies any new schema migrations (stop the world
 server first). `./twow.sh help` shows all modes. Day-to-day
 operation is documented in `server/README.linux.md`.
 
+## AI players
+
+```
+./twow.sh bots on          # asks how many, then builds that core and switches
+./twow.sh bots             # which core runs, and what changing it costs
+./twow.sh bots --count 40  # resize the cohort; applies on the next boot
+./twow.sh bots off         # back to the core the repack is built from
+```
+
+The bots come from Shyalya's fork of the core, compiled once into its own build
+tree; `on` and `off` relink `server/bin` between the two and restart. Accounts
+and characters keep their own place either way, and `off` offers to remove the
+bots' accounts and their characters. Setup asks about them once, and the
+interactive screen carries the cohort size alongside the other settings.
+
+Twenty is what a first enable starts with, which fills a realm without adding a
+thousand characters to every backup. The first boot after `on` builds the bots'
+caches and creates them, a few minutes; after that they are already there.
+
 `./twow.sh status` reports what is running. `./twow.sh doctor`
 answers the other question, whether the install is correct: binaries and map
 data, the game databases and any migrations still waiting, what the repack's
@@ -257,6 +287,8 @@ with `./twow.sh realm --name <name>`, the address with
 ## Credits
 
 - SIGGZ (send me a link) for the repack, [Penqle](https://github.com/Penqle/) for the 1181dev source
+- [Shyalya](https://github.com/Shyalya/) for the playerbots integration, and the
+  cmangos playerbots authors whose work it carries
 - [Kes](https://ko-fi.com/scribblesbykes) (NoGuiltGaming) for the Windows setup guide this follows
 - Ramach for battle-testing the setup on Debian and in a Proxmox LXC container
 - The TurtleWoW preservation [Discord](https://discord.gg/kpnCR644kk)
@@ -281,8 +313,8 @@ License, version 3 or later. `LICENSE` carries the terms, and
     Copyright (C) 2026 Xapne
     Contact: https://github.com/Xapne/twow-linux/issues or xapne@protonmail.ch
 
-The server core is Penqle's tortoise-wow, cloned at build time, and keeps the
-MaNGOS lineage's own GPL-2.0-or-later terms. The repack, the map data and the
+The server core is cloned at build time, from Penqle's tortoise-wow or from
+Shyalya's fork of it, and keeps the MaNGOS lineage's own GPL-2.0-or-later terms. The repack, the map data and the
 game client come from elsewhere and are supplied by whoever runs this; the
 copyright in them rests with their authors.
 

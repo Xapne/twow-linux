@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Copyright (C) 2026 Xapne
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Applies the migrations under ../src/sql that the database has not recorded
-# yet, each to the database its stream belongs to. Falls back to an upsert when
-# a file collides with rows already present in the imported dump.
+# Applies the migrations in this install's source checkout that the database has
+# not recorded yet, each to the database its stream belongs to. Falls back to an
+# upsert when a file collides with rows already present in the imported dump.
 # Run this after import-world-db.sh, and after every git pull + rebuild.
 set -euo pipefail
 HERE="$(dirname "$(readlink -f "$0")")"
@@ -15,22 +15,28 @@ KIT_RERUN="$0"
   || { printf 'lib/kit.sh is missing beside this folder; restore it from the repo\n' >&2; exit 1; }
 # shellcheck source=../lib/kit.sh
 . "$ROOT/lib/kit.sh"
+# Which core this install runs, and the tables that core seeds once.
+# shellcheck source=../lib/variant.sh
+. "$ROOT/lib/variant.sh"
 
-# Every migration stream the source carries, declared once. The applier, the
-# count doctor asks for through --check and the table each stream records into
-# are all derived from this; a second list drifts, and a stream left out of it
-# is schema the core expects and the database does not have.
+# Every migration stream a source checkout carries, declared once. The applier,
+# the count doctor asks for through --check and the table each stream records
+# into are all derived from this; a second list drifts, and a stream left out of
+# it is schema the core expects and the database does not have.
 #
 # Columns, separated by | :
-#   1 directory  under src/sql
+#   1 directory  under the source checkout
 #   2 database   the stream applies to
 #   3 glob       what a file of this stream is called; a stream is ordered by
 #                the 14-digit stamp its files open with, so the glob asks for
 #                one rather than taking every .sql in the directory
+#
+# What a particular core seeds beyond these is its own business and is declared
+# in lib/variant.sh, which is asked for it below.
 STREAMS=(
-  "database_updates|turtle_world|*_world.sql"
-  "database_updates/character|turtle_char|*_character.sql"
-  "character_updates|turtle_char|[0-9]*.sql"
+  "sql/database_updates|turtle_world|*_world.sql"
+  "sql/database_updates/character|turtle_char|*_character.sql"
+  "sql/character_updates|turtle_char|[0-9]*.sql"
 )
 
 # Gives a colliding INSERT the migration's newer values by appending
@@ -156,6 +162,11 @@ pending_files() {
 # run only when executed, not when sourced (keeps the functions testable)
 [[ "${BASH_SOURCE[0]}" == "$0" ]] || return 0
 
+# The core's own tables come before the stamped migrations: one of them indexes
+# a table seeded there, and a stream that runs first cannot depend on one that
+# has not.
+mapfile -t ALL_STREAMS < <(variant_streams; printf '%s\n' "${STREAMS[@]}")
+
 CHECK=0
 case "${1:-}" in
   "")        ;;
@@ -163,14 +174,15 @@ case "${1:-}" in
   # What the update mode asks before it dumps anything: the databases a
   # migration can reach, so the backup it takes covers them without a second
   # list of them living over there.
-  --databases) printf '%s\n' "${STREAMS[@]}" | cut -d'|' -f2 | sort -u; exit 0 ;;
+  --databases) printf '%s\n' "${ALL_STREAMS[@]}" | cut -d'|' -f2 | sort -u; exit 0 ;;
   -h|--help) printf 'Usage: %s [--check | --databases]\n  --check      counts what is pending and applies none\n  --databases  names the databases the streams reach\n' "$0"; exit 0 ;;
   *)         die "unknown option '$1'; --check counts what is pending and applies none,
   --databases names the databases the streams reach" ;;
 esac
 
-[[ -d "$ROOT/src/sql" ]] \
-  || die "no source checkout in src/, which is where the migrations live:
+SRC=$(variant_src)
+[[ -d "$SRC/sql" ]] \
+  || die "no source checkout in ${SRC#"$ROOT"/}, which is where the migrations live:
   $ROOT/twow.sh setup"
 
 APPLIED=$(mktemp); trap 'rm -f "$APPLIED"' EXIT
@@ -183,8 +195,8 @@ TOTAL=0
 # $1 directory, $2 database, $3 glob
 run_stream() {
   local dir=$1 db=$2 glob=$3 f name err hash status n=0
-  [[ -d "$ROOT/src/sql/$dir" ]] || return 0
-  cd "$ROOT/src/sql/$dir"
+  [[ -d "$SRC/$dir" ]] || return 0
+  cd "$SRC/$dir"
 
   if [ "$CHECK" = 1 ]; then
     applied_names "$db" > "$APPLIED"
@@ -225,7 +237,7 @@ run_stream() {
   TOTAL=$(( TOTAL + n ))
 }
 
-for stream in "${STREAMS[@]}"; do
+for stream in "${ALL_STREAMS[@]}"; do
   IFS='|' read -r dir db glob <<< "$stream"
   run_stream "$dir" "$db" "$glob"
 done
