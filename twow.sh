@@ -456,19 +456,39 @@ ensure_ace() {
 # -----------------------------------------------------------------------------
 # build realmd + mangosd, install into server/bin
 # -----------------------------------------------------------------------------
-# A cmake or gcc upgrade between runs can leave the build tree not knowing what
-# compiler it holds: cmake caches a failed identification probe with its retry
-# flag set and never probes again, and every configure after that dies in
-# dep/re2 with 'target_compile_features no known features for CXX compiler ""'.
-# Deleting the one cached file is not enough, the rest of the cache re-poisons
-# the probe, so the whole tree goes. Nothing of value is lost: the compiler
-# changed underneath, so the objects were due for a rebuild anyway.
+# A build tree records the cmake that wrote it, and meeting a different one
+# breaks the compiler probe outright: identification comes back unknown, and the
+# configure dies further down in dep/re2 with 'target_compile_features no known
+# features for CXX compiler ""'. The error names re2 and a compiler, so the
+# reader goes looking for a broken toolchain that is in fact fine. An upgrade
+# between two runs is all it takes, which on a rolling distro is any week.
+#
+# The version is compared before configuring rather than after it fails, because
+# the update path only configures through ninja: by the time the tree says
+# anything is wrong the run has already died. The failed probe also leaves an
+# empty compiler id behind, so a tree broken by an earlier run is caught too.
+# Starting over costs nothing that was not already lost: the toolchain moved.
 drop_amnesiac_build() {
-  local build=$1 f
+  local build=$1 cache="$1/CMakeCache.txt" f maj min pat wrote_by now
+  [[ -d "$build" ]] || return 0
+  now=$(cmake --version 2>/dev/null | sed -n '1s/.*version \([0-9][0-9.]*\).*/\1/p') || now=
+  # A tree that has not been configured yet has no cache to read, and a run
+  # without cmake has already been stopped by check_deps.
+  if [[ -f "$cache" && -n "$now" ]]; then
+    maj=$(sed -n 's/^CMAKE_CACHE_MAJOR_VERSION:INTERNAL=//p' "$cache")
+    min=$(sed -n 's/^CMAKE_CACHE_MINOR_VERSION:INTERNAL=//p' "$cache")
+    pat=$(sed -n 's/^CMAKE_CACHE_PATCH_VERSION:INTERNAL=//p' "$cache")
+    wrote_by="$maj.$min.$pat"
+    if [[ -n "$maj" && "$wrote_by" != "$now" ]]; then
+      say "the build tree was written by cmake $wrote_by and cmake is now $now; rebuilding from scratch"
+      rm -rf "$build"
+      return
+    fi
+  fi
   for f in "$build"/CMakeFiles/*/CMakeCXXCompiler.cmake; do
     [[ -f "$f" ]] || continue
     grep -q 'set(CMAKE_CXX_COMPILER_ID "")' "$f" || continue
-    say "the build cache lost its compiler identity (cmake or gcc was upgraded); rebuilding from scratch"
+    say "the build tree no longer knows what compiler it holds; rebuilding from scratch"
     rm -rf "$build"
     return
   done
