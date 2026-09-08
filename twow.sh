@@ -456,6 +456,24 @@ ensure_ace() {
 # -----------------------------------------------------------------------------
 # build realmd + mangosd, install into server/bin
 # -----------------------------------------------------------------------------
+# A cmake or gcc upgrade between runs can leave the build tree not knowing what
+# compiler it holds: cmake caches a failed identification probe with its retry
+# flag set and never probes again, and every configure after that dies in
+# dep/re2 with 'target_compile_features no known features for CXX compiler ""'.
+# Deleting the one cached file is not enough, the rest of the cache re-poisons
+# the probe, so the whole tree goes. Nothing of value is lost: the compiler
+# changed underneath, so the objects were due for a rebuild anyway.
+drop_amnesiac_build() {
+  local build=$1 f
+  for f in "$build"/CMakeFiles/*/CMakeCXXCompiler.cmake; do
+    [[ -f "$f" ]] || continue
+    grep -q 'set(CMAKE_CXX_COMPILER_ID "")' "$f" || continue
+    say "the build cache lost its compiler identity (cmake or gcc was upgraded); rebuilding from scratch"
+    rm -rf "$build"
+    return
+  done
+}
+
 # The binaries in server/bin are asked what they are rather than trusted to be
 # what variant.env says: a switch that stopped halfway through is the case where
 # the two disagree, and the answer decides whether this compiles or skips.
@@ -467,6 +485,7 @@ ensure_binaries() {
     say "native $v binaries already in server/bin/"; variant_save "$v"; return
   fi
   say "configuring and compiling the $v server (10-20 min on first run)"
+  drop_amnesiac_build "$build"
   mkdir -p "$build"
   read -ra flags <<< "$(variant_field "$v" cmake)"
   cmake -B "$build" -S "$src" -GNinja \
@@ -1715,6 +1734,7 @@ update_all() {
   # re-run needs the same ACE in the environment as the first configure
   select_ace
   local flags=(); read -ra flags <<< "$(variant_field "$v" cmake)"
+  drop_amnesiac_build "$build"
   mkdir -p "$build"
   [[ -f "$build/build.ninja" ]] \
     || cmake -B "$build" -S "$src" -GNinja \
