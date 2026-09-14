@@ -526,8 +526,11 @@ ensure_binaries() {
         && "$(variant_binary_label)" == "$v" ]]; then
     say "native $v binaries already in server/bin/"; variant_save "$v"; return
   fi
-  say "configuring and compiling the $v server (10-20 min on first run)"
   drop_amnesiac_build "$build"
+  # A tree already configured is brought up to date by ninja, which is seconds
+  # when nothing changed; only a fresh one is the long compile.
+  if [[ -f "$build/build.ninja" ]]; then say "bringing the $v build tree up to date"
+  else say "configuring and compiling the $v server (10-20 min)"; fi
   mkdir -p "$build"
   read -ra flags <<< "$(variant_field "$v" cmake)"
   cmake -B "$build" -S "$src" -GNinja \
