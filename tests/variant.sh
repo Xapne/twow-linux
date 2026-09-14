@@ -24,13 +24,27 @@ done
 expect "every variant declares a label, a repository, a branch and a summary" "$malformed" 0
 expect "both cores are declared" "$(variant_labels | tr '\n' ' ')" "stock bots "
 expect "the stock core takes no build options" "$(variant_field stock cmake)" ""
-expect "the bots core is built with its option" "$(variant_field bots cmake)" "-DBUILD_PLAYERBOTS=ON"
+expect "the bots core is built with its module static" \
+  "$(variant_field bots cmake)" "-DMODULES=static -DMODULE_TORTOISEBOTS=static"
 expect "an unknown label has no row" "$(variant_field nope repo 2>/dev/null || echo none)" none
+# The two cores are one checkout: what makes the second is the module cloned
+# into it, and the row says where.
+expect "both cores build the same checkout" \
+  "$([[ "$(variant_field stock repo)" == "$(variant_field bots repo)" ]] && echo same || echo differ)" same
+expect "the stock core is the checkout alone" "$(variant_module stock && echo yes || echo no)" no
+variant_module bots
+expect "the bots core clones its module into the checkout" \
+  "$m_repo $m_branch $m_path" "https://github.com/Sagiroth/TortoiseBots.git main modules/TortoiseBots"
 # The configs a core brings are placed from this column alone, so a file the
 # core reads and the table leaves out is one nobody ever writes.
 expect "the stock core brings no config of its own" "$(variant_field stock conf)" ""
-expect "the bots core brings the players' and the auction house's" \
-  "$(variant_field bots conf)" "aiplayerbot.conf ahbot.conf"
+expect "the bots core brings the players' and the module's own" \
+  "$(TWOW_VARIANT=bots variant_confs | tr '\n' ' ')" "aiplayerbot.conf modules/tortoise_bots.conf "
+expect "and each names the template it is copied from" \
+  "$(TWOW_VARIANT=bots variant_conf_source modules/tortoise_bots.conf)" \
+  "modules/TortoiseBots/conf/tortoise_bots.conf.dist"
+expect "a config the table leaves out has no template" \
+  "$(TWOW_VARIANT=bots variant_conf_source ahbot.conf || echo none)" none
 
 malformed=0
 for row in "${VARIANT_STREAMS[@]}"; do
@@ -51,10 +65,14 @@ expect "and its trees move with it" "$(variant_src)" "$ROOT/src/bots"
 expect "the environment overrides the record" "$(TWOW_VARIANT=stock variant_active)" stock
 expect "a label no table knows falls back to stock" "$(TWOW_VARIANT=eggs variant_active)" stock
 
-expect "the bots core seeds streams of its own" "$(variant_streams | wc -l)" 3
-expect "the stock core seeds none" "$(TWOW_VARIANT=stock variant_streams | wc -l)" 0
-expect "a seeded stream is applied against the world or the characters" \
+expect "the bots core carries streams of its own" "$(variant_streams | wc -l)" 2
+expect "the stock core carries none" "$(TWOW_VARIANT=stock variant_streams | wc -l)" 0
+expect "a stream of the module's is applied against the world or the characters" \
   "$(variant_streams | cut -d'|' -f2 | sort -u | grep -cv '^turtle_\(world\|char\)$')" 0
+# The applier orders a stream by the stamp its files open with, so a glob that
+# took every .sql in the directory would pass it files it cannot place.
+expect "and asks for stamped files by their suffix" \
+  "$(variant_streams | cut -d'|' -f3 | grep -cv '^\*_\(world\|char\)\.sql$')" 0
 
 # -- dependencies -------------------------------------------------------------
 expect "the bots core claims Boost"        "$(variant_needs_dep Boost && echo yes || echo no)" yes
@@ -67,9 +85,14 @@ expect "no binary at all answers nothing" "$(variant_binary_label || echo none)"
 printf 'a stock build with no bot strings in it\n' > "$SERVER/bin/mangosd"
 chmod +x "$SERVER/bin/mangosd"
 expect "a build without the bot subsystem reads as stock" "$(variant_binary_label)" stock
+# The fork an older kit built reads AiPlayerbot.* too, and has to read as a
+# build to replace rather than as the module.
 printf 'this build reads AiPlayerbot.Enabled from its config\n' > "$SERVER/bin/mangosd"
 chmod +x "$SERVER/bin/mangosd"
-expect "a build carrying the bot subsystem reads as bots" "$(variant_binary_label)" bots
+expect "a build of the fork the module replaced reads as stock" "$(variant_binary_label)" stock
+printf 'this build reads AiPlayerbot.Enabled and TortoiseBots.LogLevel\n' > "$SERVER/bin/mangosd"
+chmod +x "$SERVER/bin/mangosd"
+expect "a build carrying the bot module reads as bots" "$(variant_binary_label)" bots
 # The record and the binaries disagreeing is a switch that stopped halfway, and
 # is the one thing doctor cannot take on trust.
 expect "the record and the binaries can disagree, and it shows" \
@@ -109,6 +132,29 @@ expect "and says so through its status" \
 expect "taking a fix out that is not in there changes nothing" \
   "$(variant_unapply_patches; cat "$ROOT/src/bots/CMakeLists.txt")" \
   "upstream rewrote this file entirely"
+
+# -- a checkout from a repository the row no longer names ---------------------
+# An older kit cloned from where the row pointed then. Asking is all this does;
+# what becomes of the checkout is decided where the answer is read.
+rm -rf "$ROOT/src" "$ROOT/build"
+mkdir -p "$ROOT/src/bots"
+git -C "$ROOT/src/bots" init -q
+git -C "$ROOT/src/bots" remote add origin https://github.com/Shyalya/tortoise-wow.git
+expect "a checkout from elsewhere names where it came from" \
+  "$(variant_foreign_origin)" https://github.com/Shyalya/tortoise-wow.git
+expect "and asking touches nothing" "$([[ -d "$ROOT/src/bots/.git" ]] && echo kept || echo gone)" kept
+git -C "$ROOT/src/bots" remote set-url origin "$(variant_field bots repo)"
+expect "a checkout from the right repository is nobody's to name" "$(variant_foreign_origin)" ""
+# The same repository is spelt more than one way, and none of them is a reason
+# to clone again.
+git -C "$ROOT/src/bots" remote set-url origin "git@github.com:tortoise-wow/tortoise-wow.git"
+expect "the ssh spelling of it reads as the same" "$(variant_foreign_origin)" ""
+git -C "$ROOT/src/bots" remote set-url origin "https://github.com/tortoise-wow/tortoise-wow"
+expect "and so does one without the suffix" "$(variant_foreign_origin)" ""
+git -C "$ROOT/src/bots" remote remove origin
+expect "one with no origin to ask is left alone" "$(variant_foreign_origin)" ""
+rm -rf "$ROOT/src/bots"
+expect "no checkout at all names nothing" "$(variant_foreign_origin && echo ok)" ok
 
 # -- the old layout -----------------------------------------------------------
 rm -rf "$ROOT/src" "$ROOT/build"

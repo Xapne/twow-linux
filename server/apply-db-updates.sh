@@ -222,9 +222,9 @@ pending_all() {
 # run only when executed, not when sourced (keeps the functions testable)
 [[ "${BASH_SOURCE[0]}" == "$0" ]] || return 0
 
-# The core's own tables come before the stamped migrations: one of them indexes
-# a table seeded there, and a stream that runs first cannot depend on one that
-# has not.
+# A core's own streams join the checkout's, and pending_all places every file
+# by its stamp, so a module's migration lands among the core's where its date
+# puts it.
 mapfile -t ALL_STREAMS < <(variant_streams; printf '%s\n' "${STREAMS[@]}")
 
 CHECK=0

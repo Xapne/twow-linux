@@ -4,12 +4,13 @@
 # =============================================================================
 # Which core this install runs, and everything that follows from it
 # =============================================================================
-# The repack's own core and the playerbots core are two branches of two forks,
-# and they differ in more than a compile flag: a repository, a branch, a cmake
-# option, a dependency, a config file the repack never shipped, and a set of
-# tables that has to be seeded once. All of that is declared in the two tables
-# below and read from there by everyone else, so switching cores is a row of
-# data rather than a condition spread through the kit.
+# The repack's own core and the core with AI players are the same checkout
+# with a module built in, and they differ in more than a compile flag: a second
+# repository cloned into the first, a cmake option, a dependency, config files
+# the repack never shipped, and migrations of the module's own. All of that is
+# declared in the two tables below and read from there by everyone else, so
+# switching cores is a row of data rather than a condition spread through the
+# kit.
 #
 # ROOT and SERVER come from the caller, the same way lib/kit.sh takes them.
 
@@ -21,36 +22,38 @@ VARIANT_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 #   1 label    what this install calls itself, and the name in variant.env
 #   2 repo     git remote the core is built from
 #   3 branch   branch in it
-#   4 cmake    options the build needs beyond the shared ones
-#   5 deps     labels in twow.sh's DEPS this core needs and the other does not
-#   6 conf     config files it brings that the repack does not ship, space
-#              separated, each placed beside mangosd.conf
-#   7 summary  one line, printed by 'bots' and by doctor
+#   4 module   a second repository built into the checkout, as
+#              repo branch path, the path being where under the checkout it is
+#              cloned to; empty for a core that is the checkout alone
+#   5 cmake    options the build needs beyond the shared ones
+#   6 deps     labels in twow.sh's DEPS this core needs and the other does not
+#   7 conf     config files it brings that the repack does not ship, space
+#              separated, each as name=source: the name is where it is placed,
+#              relative to mangosd.conf, and the source is the template of it
+#              under the checkout
+#   8 summary  one line, printed by 'bots' and by doctor
 VARIANTS=(
-  "stock|https://github.com/Penqle/tortoise-wow.git|1181dev|||\
+  "stock|https://github.com/tortoise-wow/tortoise-wow.git|main||||\
 |the core the repack is built from"
-  "bots|https://github.com/Shyalya/tortoise-wow.git|playerbots-integration-gh|-DBUILD_PLAYERBOTS=ON|Boost|aiplayerbot.conf ahbot.conf\
-|a fork of it carrying AI players, with its own fixes"
+  "bots|https://github.com/tortoise-wow/tortoise-wow.git|main\
+|https://github.com/Sagiroth/TortoiseBots.git main modules/TortoiseBots\
+|-DMODULES=static -DMODULE_TORTOISEBOTS=static|Boost\
+|aiplayerbot.conf=modules/TortoiseBots/ai/playerbot/aiplayerbot.conf.dist.in \
+modules/tortoise_bots.conf=modules/TortoiseBots/conf/tortoise_bots.conf.dist\
+|the same core with TortoiseBots, a module of AI players"
 )
 
-# Tables a core seeds once and then owns, as
-# variant|directory under the source|database|glob. What the core ships for
-# both, in sql/base, is the applier's own business: it takes a table from there
-# when the database has never had one.
-# These carry DROP TABLE at the top, so they are seeded once and never again;
-# the applier records them by name, which is what makes that true. They are
-# applied before the stamped migrations, since a migration in the fork's
-# character stream indexes a table seeded here.
+# Migrations a core carries beyond the checkout's own, as
+# variant|directory under the source|database|glob. They are stamped and
+# idempotent like the core's, so the applier interleaves them by stamp and
+# records each by name.
 VARIANT_STREAMS=(
-  "bots|src/modules/PlayerBots/sql/world|turtle_world|*.sql"
-  "bots|src/modules/PlayerBots/sql/world/classic|turtle_world|*.sql"
-  "bots|src/modules/PlayerBots/sql/characters|turtle_char|*.sql"
+  "bots|modules/TortoiseBots/data/sql/world|turtle_world|*_world.sql"
+  "bots|modules/TortoiseBots/data/sql/char|turtle_char|*_char.sql"
 )
 
-# What a first enable starts with. The fork's own aiplayerbot.conf.dist ships
-# a thousand, which is minutes of cache building on a first boot and a thousand
-# characters in every backup; its quick-start advises starting small.
-# Read by twow.sh, which sources this file.
+# What a first enable starts with; the module ships none. A cohort is minutes
+# of cache building on a first boot and as many characters in every backup.
 # shellcheck disable=SC2034
 VARIANT_BOTS_DEFAULT=20
 
@@ -62,28 +65,61 @@ VARIANT_BOTS_LEVELS_DEFAULT=spread
 # Split one row into the caller's local variables, so the column order is
 # written down exactly once.
 variant_parse() {
-  IFS='|' read -r v_label v_repo v_branch v_cmake v_deps v_conf v_summary <<<"$1"
+  IFS='|' read -r v_label v_repo v_branch v_module v_cmake v_deps v_conf v_summary <<<"$1"
 }
 
 variant_labels() {
-  local row v_label v_repo v_branch v_cmake v_deps v_conf v_summary
+  local row v_label v_repo v_branch v_module v_cmake v_deps v_conf v_summary
   for row in "${VARIANTS[@]}"; do variant_parse "$row"; printf '%s\n' "$v_label"; done
 }
 
 # One field of one variant, by label and column name.
-# $1 label, $2 one of repo branch cmake deps conf summary
+# $1 label, $2 one of repo branch module cmake deps conf summary
 variant_field() {
-  local row v_label v_repo v_branch v_cmake v_deps v_conf v_summary
+  local row v_label v_repo v_branch v_module v_cmake v_deps v_conf v_summary
   for row in "${VARIANTS[@]}"; do
     variant_parse "$row"
     [[ "$v_label" == "$1" ]] || continue
     case "$2" in
       repo) printf '%s' "$v_repo" ;; branch) printf '%s' "$v_branch" ;;
-      cmake) printf '%s' "$v_cmake" ;; deps) printf '%s' "$v_deps" ;;
-      conf) printf '%s' "$v_conf" ;; summary) printf '%s' "$v_summary" ;;
+      module) printf '%s' "$v_module" ;; cmake) printf '%s' "$v_cmake" ;;
+      deps) printf '%s' "$v_deps" ;; conf) printf '%s' "$v_conf" ;;
+      summary) printf '%s' "$v_summary" ;;
       *) return 1 ;;
     esac
     return 0
+  done
+  return 1
+}
+
+# The module a core builds into its checkout, split into the caller's m_repo,
+# m_branch and m_path the way variant_parse splits a row. False for a core that
+# is the checkout alone.
+variant_module() {  # $1 label
+  # shellcheck disable=SC2034  # split for the caller, the way variant_parse is
+  read -r m_repo m_branch m_path <<<"$(variant_field "$1" module)"
+  [[ -n "$m_repo" ]]
+}
+
+# The configs the active core brings, one per line, each as it is called
+# relative to mangosd.conf.
+variant_confs() {
+  local e
+  for e in $(variant_field "$(variant_active)" conf); do printf '%s\n' "${e%%=*}"; done
+  return 0
+}
+
+# Where under the build tree the configured copy of one of them is written:
+# every one lands in modules/ under its bare name.
+# $1 the config, as it is called relative to mangosd.conf
+variant_conf_generated() { printf 'modules/%s' "${1##*/}"; }
+
+# Where under the checkout the template of one of them sits.
+# $1 the config, as it is called relative to mangosd.conf
+variant_conf_source() {
+  local e
+  for e in $(variant_field "$(variant_active)" conf); do
+    [[ "${e%%=*}" == "$1" ]] && { printf '%s' "${e#*=}"; return 0; }
   done
   return 1
 }
@@ -118,8 +154,8 @@ EOF
 variant_src()   { printf '%s' "$ROOT/src/$(variant_active)"; }
 variant_build() { printf '%s' "$ROOT/build/$(variant_active)"; }
 
-# The streams the active core seeds, in the applier's own directory|db|glob
-# shape, with the directory relative to that core's checkout.
+# The streams the active core carries beyond the checkout's own, in the
+# applier's own directory|db|glob shape, relative to that core's checkout.
 variant_streams() {
   local row want; want=$(variant_active)
   for row in "${VARIANT_STREAMS[@]}"; do
@@ -131,7 +167,7 @@ variant_streams() {
 # Which cores claim a dependency, for a report that has to say who it is for.
 # $1 label
 variant_claiming_dep() {
-  local row claiming=() v_label v_repo v_branch v_cmake v_deps v_conf v_summary
+  local row claiming=() v_label v_repo v_branch v_module v_cmake v_deps v_conf v_summary
   for row in "${VARIANTS[@]}"; do
     variant_parse "$row"
     [[ " $v_deps " == *" $1 "* ]] && claiming+=("$v_label")
@@ -146,13 +182,15 @@ variant_needs_dep() {  # $1 label
   [[ " $deps " == *" $1 "* ]]
 }
 
-# Whether the installed world server actually carries the bot subsystem. The
+# Whether the installed world server actually carries the bot module. The
 # config keys it reads are in the binary whether or not they are ever set, so
 # this answers for the build rather than for what was written down, which is
-# the one question a stale variant.env cannot be trusted on.
+# the one question a stale variant.env cannot be trusted on. The key is the
+# module's own: the fork an older kit built reads AiPlayerbot.* too, and a
+# build of it has to read as something to build again.
 variant_binary_has_bots() {
   [[ -x "$SERVER/bin/mangosd" ]] || return 1
-  grep -qa 'AiPlayerbot\.' "$SERVER/bin/mangosd"
+  grep -qa 'TortoiseBots\.' "$SERVER/bin/mangosd"
 }
 
 # What the binaries in server/bin were built from, read off the binaries.
@@ -205,6 +243,25 @@ variant_unapply_patches() {
       && git -C "$src" apply --reverse "$p" 2>/dev/null
   done < <(variant_patches)
   return 0
+}
+
+# One spelling of a git remote, so the two ways GitHub is written read as one.
+variant_remote_norm() {  # $1 url
+  local u=${1%/}; u=${u%.git}
+  u=${u/#git@github.com:/https:\/\/github.com\/}
+  printf '%s' "${u,,}"
+}
+
+# The origin of the active core's checkout, printed when it is not the
+# repository the row names: an older kit cloned it from where the row pointed
+# then. Prints nothing for a checkout that matches or is absent.
+variant_foreign_origin() {
+  local src origin
+  src=$(variant_src)
+  [[ -d "$src/.git" ]] || return 0
+  origin=$(git -C "$src" remote get-url origin 2>/dev/null) || return 0
+  [[ "$(variant_remote_norm "$origin")" == "$(variant_remote_norm "$(variant_field "$(variant_active)" repo)")" ]] && return 0
+  printf '%s' "$origin"
 }
 
 # Installs made before the kit knew about variants keep the single src/ and

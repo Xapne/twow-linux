@@ -30,9 +30,9 @@ SERVER="$ROOT/server"
 # script shares with the scripts in server/. Both used to carry a copy.
 # shellcheck source=lib/kit.sh
 . "$ROOT/lib/kit.sh"
-# Which core this install runs: its repository, branch, build options, extra
-# dependency, config and seed tables. Everything below asks this rather than
-# naming a fork.
+# Which core this install runs: its repository, branch, module, build options,
+# extra dependency, configs and migrations. Everything below asks this rather
+# than naming a repository.
 # shellcheck source=lib/variant.sh
 . "$ROOT/lib/variant.sh"
 # Overrides the compile job count worked out below, for a machine the
@@ -81,7 +81,7 @@ DEPS=(
   "OpenSSL headers|header|openssl/ssl.h|required|libssl-dev|openssl-devel|libopenssl-devel|openssl"
   "ZLIB headers|header|zlib.h|required|zlib1g-dev|zlib-devel|zlib-devel|zlib"
   "ACE library|ace||optional|libace-dev|-|-|-"
-  "Boost|header|boost/thread.hpp boost/filesystem.hpp|variant|libboost-thread-dev libboost-filesystem-dev libboost-system-dev|boost-devel|libboost_thread-devel libboost_filesystem-devel libboost_system-devel|boost"
+  "Boost|header|boost/algorithm/string.hpp boost/bimap.hpp boost/stacktrace.hpp boost/filesystem.hpp|variant|libboost-dev|boost-devel|libboost_headers-devel|boost"
   "wine|cmd|wine|seed|wine|wine|wine|wine"
   "tmux|cmd|tmux|console|tmux|tmux|tmux|tmux"
 )
@@ -270,18 +270,40 @@ ensure_mapdata() {
 # source checkout
 # -----------------------------------------------------------------------------
 ensure_source() {
-  local v src repo branch
-  v=$(variant_active); src=$(variant_src)
+  local v src build repo branch gone m_repo m_branch m_path
+  v=$(variant_active); src=$(variant_src); build=$(variant_build)
   variant_migrate_legacy \
     || die "could not move the existing checkout to src/stock; move it by hand and re-run"
+  repo=$(variant_field "$v" repo); branch=$(variant_field "$v" branch)
+  # A checkout from a repository the row no longer names goes with its build
+  # tree, since a pull never crosses that change and nothing built from it
+  # belongs here. Edits in it are somebody's and stop this instead.
+  gone=$(variant_foreign_origin)
+  if [[ -n "$gone" ]]; then
+    say "the $v source in ${src#"$ROOT"/} was cloned from $gone, and the kit now builds from $repo; replacing it and its build tree"
+    [[ -z "$(git -C "$src" status --porcelain --untracked-files=no 2>/dev/null)" ]] \
+      || die "${src#"$ROOT"/} has local edits; move it aside by hand and re-run"
+    rm -rf "$src" "$build" \
+      || die "could not remove ${src#"$ROOT"/}; remove it by hand and re-run"
+  fi
   if [[ -f "$src/CMakeLists.txt" ]]; then
     say "$v source already in ${src#"$ROOT"/}"
   else
-    repo=$(variant_field "$v" repo); branch=$(variant_field "$v" branch)
     say "cloning $repo ($branch)"
     mkdir -p "$ROOT/src"
     git clone --depth 1 --branch "$branch" "$repo" "$src" \
       || die "git clone failed. Check network access and that branch '$branch' still exists."
+  fi
+  if variant_module "$v"; then
+    if [[ -d "$src/$m_path/.git" ]]; then
+      say "$v module already in ${src#"$ROOT"/}/$m_path"
+    elif [[ -e "$src/$m_path" ]]; then
+      die "${src#"$ROOT"/}/$m_path is there and is not a checkout; move it aside and re-run"
+    else
+      say "cloning $m_repo ($m_branch) into ${src#"$ROOT"/}/$m_path"
+      git clone --depth 1 --branch "$m_branch" "$m_repo" "$src/$m_path" \
+        || die "git clone failed. Check network access and that branch '$m_branch' still exists."
+    fi
   fi
   apply_source_patches
 }
@@ -562,17 +584,24 @@ fix_configs() {
 # A core that brings a config the repack never shipped gets it put where it
 # looks for it, on every run rather than only on a switch: a container or a
 # scripted install never passes through 'bots on' at all. An existing file keeps
-# the count it was given, and every count derived from it is settled again.
+# the count it was given, and the keys that follow from it are settled again.
 ensure_variant_conf() {  # $1 how many bots, $2 near or spread; either may be
                          # left out, and what the config asks for stands
-  local confs n=${1:-}
-  confs=" $(variant_field "$(variant_active)" conf) "
+  local c n=${1:-}
+  # The core carries an updater of its own that writes the same migrations
+  # table; the kit's applier is the one writer here, on every path that runs.
+  [[ -f "$SERVER/bin/mangosd.conf" ]] \
+    && conf_put "$SERVER/bin/mangosd.conf" Database.AutoUpdate.Enabled 0
+  # The auction house config an older kit placed is read by nothing now.
+  [[ -f "$SERVER/bin/ahbot.conf" ]] \
+    && rm -f "$SERVER/bin/ahbot.conf" && say "ahbot.conf removed; the module reads nothing from it"
   [[ "$n" =~ ^[0-9]+$ ]] || { n=$(bot_count 2>/dev/null) || n=""; }
   [[ "$n" =~ ^[0-9]+$ ]] || n=$VARIANT_BOTS_DEFAULT
-  # The auction house is placed first, so the cohort size settles its switch
-  # along with every other count derived from it.
-  [[ "$confs" == *" ahbot.conf "* ]] && ensure_ahbot_conf
-  [[ "$confs" == *" aiplayerbot.conf "* ]] && ensure_bot_conf "$n" "${2:-}"
+  while IFS= read -r c; do
+    [[ -n "$c" ]] || continue
+    if [[ "$SERVER/bin/$c" == "$BOT_CONF" ]]; then ensure_bot_conf "$n" "${2:-}"
+    else place_module_conf "$SERVER/bin/$c"; fi
+  done < <(variant_confs)
   return 0
 }
 
@@ -1291,45 +1320,24 @@ interactive_config() {
 # AI players: the other core, and the cohort it keeps
 # -----------------------------------------------------------------------------
 # One command decides which core this install runs, because populating the world
-# is the only thing anyone wants from it; which fork, branch, build option and
+# is the only thing anyone wants from it; which module, build option and
 # dependency that means is lib/variant.sh's business and is named nowhere else.
 # A switch never touches accounts or characters: the databases either core reads
-# differently are the world's, and the bots' own tables are seeded once and left
-# alone from then on.
+# differently are the world's, and the module's own migrations are recorded
+# like the core's and never applied twice.
 BOT_CONF="$SERVER/bin/aiplayerbot.conf"
-# The auction house the bots trade on. It is the same module and the same
-# lifetime as the players, so it is placed and carried forward with them.
-AHBOT_CONF="$SERVER/bin/ahbot.conf"
 
-# The dist a module config is copied from. A build generates one beside the
-# module; the source's own copy stands in where a build tree has been cleared,
-# and each subsystem keeps that one in a directory of its own.
-# $1 the file's name, as it is called beside mangosd.conf
+# The dist a module config is copied from: the copy a build configured, or the
+# checkout's own template where a build tree has been cleared.
+# $1 the file's name, as it is called relative to mangosd.conf
 bot_conf_dist() {
   local b s
-  b="$(variant_build)/src/modules/PlayerBots/$1.dist"
+  b="$(variant_build)/$(variant_conf_generated "$1")"
   [[ -f "$b" ]] && { printf '%s' "$b"; return 0; }
-  for s in "$(variant_src)"/src/modules/PlayerBots/*/"$1.dist.in"; do
-    [[ -f "$s" ]] && { printf '%s' "$s"; return 0; }
-  done
+  s=$(variant_conf_source "$1") || return 1
+  s="$(variant_src)/$s"
+  [[ -f "$s" ]] && { printf '%s' "$s"; return 0; }
   return 1
-}
-
-# The core fills every account it creates with nine characters on this
-# expansion and draws the cohort from that pool, so the account count is what
-# decides how many characters a first boot writes.
-BOT_CHARS_PER_ACCOUNT=9
-bot_accounts_for() {  # $1 how many bots
-  printf '%s' "$(( ( ${1:-0} + BOT_CHARS_PER_ACCOUNT - 1) / BOT_CHARS_PER_ACCOUNT ))"
-}
-
-# Guilds are founded by bots and filled from the same pool, so the shipped
-# twenty would leave a small realm with a guild per bot.
-BOT_GUILDS_MAX=20
-bot_guilds_for() {  # $1 how many bots
-  local g; g=$(bot_accounts_for "${1:-0}")
-  (( g > BOT_GUILDS_MAX )) && g=$BOT_GUILDS_MAX
-  printf '%s' "$g"
 }
 
 # Whether the world is started with the full path of its config. A module reads
@@ -1361,13 +1369,14 @@ bot_characters() {
 }
 
 # Puts the bot config where the core looks for it, which is beside mangosd.conf,
-# and settles the three keys that decide what a boot does. The shipped file asks
-# for a thousand bots, and for one boot in ten thousand to wipe the cohort and
-# build it again.
+# and settles the keys that decide what a boot does. The shipped file has the
+# module off, asks for no bots, and neither creates nor logs in any.
 ensure_bot_conf() {  # $1 how many bots, $2 near or spread, or nothing for what
                      # the config asks
   place_module_conf "$BOT_CONF"
-  conf_set "$BOT_CONF" AiPlayerbot.Enabled 1
+  # Put rather than set, so a copy placed by an older kit gains the keys
+  # before any template is there to take them from.
+  conf_put "$BOT_CONF" AiPlayerbot.Enabled 1
   set_bot_count "$1"
   # Written out on a first placement so the realm says which way it runs, and
   # left alone after that: the levels are somebody's answer, not a derived count.
@@ -1375,25 +1384,18 @@ ensure_bot_conf() {  # $1 how many bots, $2 near or spread, or nothing for what
   elif ! conf_has "$BOT_CONF" AiPlayerbot.SyncLevelWithPlayers; then
     set_bot_levels "$VARIANT_BOTS_LEVELS_DEFAULT"
   fi
-  # One boot with this set wipes the cohort and creates it again. That is a
-  # reset somebody asks for by hand, never what a switch leaves behind.
-  conf_set "$BOT_CONF" AiPlayerbot.DeleteRandomBotAccounts 0
+  # Both are off as shipped, and a cohort with either off is asked for and
+  # never seen: the one writes the accounts, the other logs them in.
+  conf_put "$BOT_CONF" AiPlayerbot.RandomBotAutoCreate 1
+  conf_put "$BOT_CONF" AiPlayerbot.RandomBotAutologin 1
 }
 
-# Every count the core derives from the cohort moves with it. Both ends of the
-# range are set, since a range creates bots up to the top and logs in as few as
-# the bottom, and the account count with them: the shipped five hundred accounts
-# write four and a half thousand characters whatever the cohort asks for.
+# Both ends of the range are set, since a range creates bots up to the top and
+# logs in as few as the bottom. The accounts holding them are the module's own
+# business: it fills the ones it finds and writes more as the cohort needs.
 set_bot_count() {  # $1 how many
   conf_set "$BOT_CONF" AiPlayerbot.MinRandomBots "$1"
   conf_set "$BOT_CONF" AiPlayerbot.MaxRandomBots "$1"
-  conf_set "$BOT_CONF" AiPlayerbot.RandomBotAccountCount "$(bot_accounts_for "$1")"
-  conf_set "$BOT_CONF" AiPlayerbot.RandomBotGuildCount "$(bot_guilds_for "$1")"
-  # The auction house runs on the cohort's own characters, so a realm that asks
-  # for no bots has nobody to trade and the core would report that every
-  # quarter of an hour.
-  [[ -f "$AHBOT_CONF" ]] \
-    && conf_set "$AHBOT_CONF" AhBot.Enabled "$([[ "$1" =~ ^[0-9]+$ ]] && (( $1 > 0 )) && echo 1 || echo 0)"
   return 0
 }
 
@@ -1436,7 +1438,7 @@ set_bot_levels() {
 bot_conf_missing() {
   [[ -f "$1" ]] || return 0
   local dist line key
-  dist=$(bot_conf_dist "${1##*/}") || return 0
+  dist=$(bot_conf_dist "${1#"$SERVER/bin/"}") || return 0
   while IFS= read -r line; do
     key=${line%%=*}; key=${key%"${key##*[![:space:]]}"}
     conf_has "$1" "$key" || printf '%s\n' "$line"
@@ -1458,26 +1460,19 @@ bot_conf_freshen() {
   return 0
 }
 
-# Copies a module config into server/bin, where the core reads it from beside
+# Copies a module config into server/bin, where the core reads it relative to
 # mangosd.conf, and brings one already there forward.
 # $1 the config in server/bin
 place_module_conf() {
-  local dist name=${1##*/}
+  local dist name=${1#"$SERVER/bin/"}
   if [[ ! -f "$1" ]]; then
     dist=$(bot_conf_dist "$name") || die "the $(variant_active) source carries no $name to copy;
   re-run '$0 bots on' once the source is in place"
+    mkdir -p "${1%/*}" || die "could not create ${1%/*}"
     cp "$dist" "$1" || die "could not write $1"
     say "$name placed beside mangosd.conf, where the core looks for it"
   fi
   bot_conf_freshen "$1"
-}
-
-# The auction house the bots trade on, put where the core reads it from. What
-# it needs beyond that is the cohort itself: bidders and sellers are the bots'
-# own characters, which is why AhBot.GUID is left at zero - it names the one
-# character to fall back on where a realm has no bot accounts at all.
-ensure_ahbot_conf() {
-  place_module_conf "$AHBOT_CONF"
 }
 
 # The number is asked rather than assumed: it decides how long the next boot
@@ -1490,7 +1485,6 @@ ask_bot_count() {
   [[ -t 0 ]] || return 0
   ui_intro "how many"
   ui_note "each bot is a character that levels, quests, groups and trades"
-  ui_note "they run the auction house between them, so it is stocked from the first boot"
   ui_note "the first boot builds their caches, which takes longer the more there are"
   ui_num "How many bots?" "$BOT_COUNT"
   BOT_COUNT=${ANSWER%%.*}
@@ -1532,13 +1526,12 @@ bots_report() {
     else
       say "levels    spread from $(conf_get "$BOT_CONF" AiPlayerbot.RandomBotMinLevel) to $(conf_get "$BOT_CONF" AiPlayerbot.RandomBotMaxLevel)"
     fi
-    [[ -f "$AHBOT_CONF" ]] \
-      && say "auctions  $([[ "$(conf_get "$AHBOT_CONF" AhBot.Enabled)" == 1 ]] \
-              && echo "run by the bots, buying and selling as their own characters" \
-              || echo "off in ahbot.conf")"
   fi
   other=bots; [[ "$v" == bots ]] && other=stock
-  if [[ -d "$(TWOW_VARIANT=$other variant_src)" && -d "$(TWOW_VARIANT=$other variant_build)" ]]; then
+  # A tree from a repository the row no longer names is replaced on the switch,
+  # so it counts for nothing here.
+  if [[ -d "$(TWOW_VARIANT=$other variant_src)" && -d "$(TWOW_VARIANT=$other variant_build)" \
+        && -z "$(TWOW_VARIANT=$other variant_foreign_origin)" ]]; then
     say "$0 bots $([[ "$other" == bots ]] && echo on || echo off) switches in a minute; the $other tree is still here"
   else
     say "$0 bots $([[ "$other" == bots ]] && echo on || echo off) clones and compiles that core once, 10-20 minutes"
@@ -1661,8 +1654,7 @@ offer_bots() {
   fi
   ui_intro "AI players"
   ui_note "a cohort of bots that level, quest, group and trade, so the world is not empty"
-  ui_note "they stock the auction house between them, as their own characters"
-  ui_note "they run on a fork of the core, which is compiled once: 10-20 minutes"
+  ui_note "they are a module built into the core, which is compiled once: 10-20 minutes"
   ui_select "Populate the world with AI players?" 0 \
     "No, just me and whoever I invite" \
     "Yes, add AI players"
@@ -1724,10 +1716,14 @@ assert_servers_stopped() {
 # running.
 # -----------------------------------------------------------------------------
 update_all() {
-  local v src build; v=$(variant_active); src=$(variant_src); build=$(variant_build)
+  local v src build m_repo m_branch m_path
+  v=$(variant_active); src=$(variant_src); build=$(variant_build)
   [[ -d "$src/.git" ]] || die "no source checkout in ${src#"$ROOT"/}; run: $0 setup"
   [[ -x "$SERVER/bin/mangosd" ]] || die "not converted yet; run: $0 setup"
   assert_servers_stopped
+  # A checkout an older kit made from another fork, or one still without the
+  # module, is brought forward here rather than pulled as it stands.
+  ensure_source
 
   say "pulling latest $(variant_field "$v" branch) source for the $v core"
   local before after
@@ -1739,7 +1735,7 @@ update_all() {
     # The checkout goes back to what it was, fixes and all, since nothing else
     # in this run will put them back.
     apply_source_patches
-    die "git pull failed (local changes in ${src#"$ROOT"/}? no network?); nothing was touched"
+    die "git pull failed (local changes in ${src#"$ROOT"/}? no network?); the checkout stands as it was"
   fi
   after=$(git -C "$src" rev-parse --short HEAD)
   apply_source_patches
@@ -1747,6 +1743,15 @@ update_all() {
     say "source already at $after; still checking build and migrations"
   else
     say "source updated: $before -> $after"
+  fi
+  # The module moves on its own, in a checkout of its own inside the core's.
+  if variant_module "$v"; then
+    before=$(git -C "$src/$m_path" rev-parse --short HEAD)
+    git -C "$src/$m_path" pull --ff-only \
+      || die "git pull failed in ${src#"$ROOT"/}/$m_path (local changes? no network?); the module stands as it was"
+    after=$(git -C "$src/$m_path" rev-parse --short HEAD)
+    if [[ "$before" == "$after" ]]; then say "$m_path already at $after"
+    else say "$m_path updated: $before -> $after"; fi
   fi
 
   say "rebuilding mangosd and realmd (incremental, only what changed)"
@@ -2129,7 +2134,7 @@ doctor_service() {
 # install runs, the binary says what it is, and a switch that stopped halfway is
 # exactly where they disagree.
 doctor_core() {
-  local v built want have n f
+  local v built want n f
   v=$(variant_active)
   dr_head "core"
   built=$(variant_binary_label) || built=""
@@ -2148,43 +2153,34 @@ doctor_core() {
     if [[ -f "$BOT_CONF" ]]; then
       dr_ok "aiplayerbot.conf sits beside mangosd.conf, where the core reads it"
       [[ "$(conf_get "$BOT_CONF" AiPlayerbot.Enabled)" == 1 ]] \
-        || dr_bad "the bot subsystem is built but switched off in aiplayerbot.conf" \
+        || dr_bad "the bot module is built but switched off in aiplayerbot.conf" \
              "set AiPlayerbot.Enabled = 1"
-      [[ "$(conf_get "$BOT_CONF" AiPlayerbot.DeleteRandomBotAccounts)" == 1 ]] \
-        && dr_bad "DeleteRandomBotAccounts is on, which wipes and rebuilds the cohort every boot" \
-             "set AiPlayerbot.DeleteRandomBotAccounts = 0"
-      # The accounts the core is told to create decide how many characters the
-      # first boot writes, nine to an account, and the cohort is drawn from
-      # those. A config whose accounts no longer follow the cohort is what
-      # leaves thousands of characters in a realm that asked for twenty bots.
-      want=$(bot_count); have=$(conf_get "$BOT_CONF" AiPlayerbot.RandomBotAccountCount)
-      if [[ "$want" =~ ^[0-9]+$ && "$have" =~ ^[0-9]+$ ]]; then
-        if (( have == $(bot_accounts_for "$want") )); then
-          dr_ok "$have bot account(s) are asked for, which carries a cohort of $want"
-        else
-          dr_bad "the config creates $have bot account(s) for a cohort of $want, which is \
-$(( have * BOT_CHARS_PER_ACCOUNT )) bot character(s)" "$0 bots --count $want"
-        fi
+      # A cohort is asked for by its count and delivered by these two: one
+      # writes the accounts, the other logs them in, and the shipped file has
+      # both off.
+      want=$(bot_count)
+      if [[ "$(conf_get "$BOT_CONF" AiPlayerbot.RandomBotAutoCreate)" == 1 \
+            && "$(conf_get "$BOT_CONF" AiPlayerbot.RandomBotAutologin)" == 1 ]]; then
+        dr_ok "a cohort of $want is asked for, created and logged in by the module"
+      else
+        dr_bad "a cohort of $want is asked for, but the module is told not to create or log it in" \
+          "$0 bots --count $want"
       fi
     else
       dr_bad "no aiplayerbot.conf beside mangosd.conf, so the bots stay asleep" "$0 bots on"
     fi
-    # The auction house is the same module and reads its own file from the same
-    # place. It trades as the cohort's characters, so it is on with them.
-    if [[ -f "$AHBOT_CONF" ]]; then
-      if [[ "$(conf_get "$AHBOT_CONF" AhBot.Enabled)" == 1 ]]; then
-        dr_ok "the bots run the auction house, buying and selling as their own characters"
-      else
-        dr_note "the auction house is switched off in ahbot.conf ($0 bots --count <n> turns it on with the cohort)"
-      fi
-    else
-      dr_note "no ahbot.conf beside mangosd.conf, so the auction house stays quiet ($0 bots on)"
-    fi
-    for f in "$BOT_CONF" "$AHBOT_CONF"; do
-      [[ -f "$f" ]] || continue
-      n=$(bot_conf_missing "$f" | wc -l)
-      (( n )) && dr_note "$n setting(s) have been added to ${f##*/} since it was copied ($0 update)"
-    done
+    # Every other config the module brings is read from the same place, and
+    # the world refuses to start without one of them.
+    while IFS= read -r f; do
+      [[ -n "$f" && "$SERVER/bin/$f" != "$BOT_CONF" ]] || continue
+      if [[ -f "$SERVER/bin/$f" ]]; then dr_ok "$f sits with mangosd.conf, where the module reads it"
+      else dr_bad "no $f with mangosd.conf, and the world server stops without it" "$0 bots on"; fi
+    done < <(variant_confs)
+    while IFS= read -r f; do
+      [[ -n "$f" && -f "$SERVER/bin/$f" ]] || continue
+      n=$(bot_conf_missing "$SERVER/bin/$f" | wc -l)
+      (( n )) && dr_note "$n setting(s) have been added to $f since it was copied ($0 update)"
+    done < <(variant_confs)
     if world_start_names_conf "$SERVER/3-world-server.sh"; then
       dr_ok "the world server hands the core its config by full path, where the bots' own sit"
     else
@@ -2714,9 +2710,10 @@ LICENSE beside this script, and at <https://www.gnu.org/licenses/gpl-3.0.html>.
 
 The server core is tortoise-wow, built here from
   $(variant_field "$(variant_active)" repo) ($(variant_field "$(variant_active)" branch))
-and keeps its own GPL-2.0-or-later terms. The core that carries AI players
-vendors cmangos/playerbots, under the same terms. The repack, the map data and
-the game client come from elsewhere and are supplied by whoever runs this.
+under its own AGPL-3.0 terms. The AI players are TortoiseBots, a module built
+into that core, which combines its own code with GPL-2.0 donor code and records
+where each part came from. The repack, the map data and the game client come
+from elsewhere and are supplied by whoever runs this.
 
 Contact: https://github.com/Xapne/twow-linux/issues or xapne@protonmail.ch
 
@@ -2820,10 +2817,10 @@ ${C_BOLD}Modes:${C_RST}
                  loopback.${C_RST}
   ${C_GREEN}bots${C_RST} [on | off | --count <n> | --level near|spread | --purge]
                  populate the world with AI players: bots that level, quest,
-                 group, trade and run the auction house between them. They
-                 run on a fork of the core, which is compiled once; on and off
-                 switch between the two, and each keeps its own checkout, so
-                 switching back is quick. --level near keeps them to the
+                 group and trade. They are a module built into the core, which
+                 is compiled once; on and off switch between the two builds,
+                 and each keeps its own checkout, so switching back is quick.
+                 --level near keeps them to the
                  levels being played, so there is company at yours; spread
                  fills every level, which is how the core ships.
                  ${C_DIM}Player accounts and characters are never touched.
@@ -2944,12 +2941,9 @@ case "$mode" in
                ensure_variant_conf "$BOT_COUNT"
                say "the realm asks for $BOT_COUNT bots; restart the server to apply: $0 run"
                # A cohort grows on the next boot and never shrinks on its own:
-               # the core writes bot characters and leaves them where they are.
-               # What the new count asks for is the pool its accounts hold, not
-               # the cohort itself, which is drawn from that pool.
+               # the module writes bot characters and leaves them where they are.
                written=$(bot_characters 2>/dev/null) || written=""
-               pool=$(( $(bot_accounts_for "$BOT_COUNT") * BOT_CHARS_PER_ACCOUNT ))
-               if [[ "$written" =~ ^[0-9]+$ ]] && (( written > pool )); then
+               if [[ "$written" =~ ^[0-9]+$ ]] && (( written > BOT_COUNT )); then
                  say "$written bot character(s) are already written; the extra ones stay until: $0 bots --purge"
                else
                  say "the next boot writes what is missing, up to the new count"

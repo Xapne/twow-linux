@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Copyright (C) 2026 Xapne
 # SPDX-License-Identifier: GPL-3.0-or-later
-# What a cohort size means once the core has it: how many accounts and guilds
-# are created for it, and how the config it lives in is carried forward. The
-# counts are the part an install cannot get wrong quietly - the core writes nine
-# characters per account it is told to create, whatever the cohort asks for.
+# What a cohort size means once the core has it: which keys it settles, where
+# the module's configs are placed, and how each is carried forward. The keys
+# are the part an install cannot get wrong quietly - the module ships with the
+# cohort neither created nor logged in, whatever the count asks for.
 # shellcheck source=tests/_assert.sh
 . "$(dirname "${BASH_SOURCE[0]}")/_assert.sh"
 # shellcheck source=twow.sh
@@ -14,56 +14,49 @@ TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 ROOT="$TMP"; SERVER="$TMP/server"
 mkdir -p "$SERVER/bin"
 BOT_CONF="$SERVER/bin/aiplayerbot.conf"
-AHBOT_CONF="$SERVER/bin/ahbot.conf"
+MODULE_CONF="$SERVER/bin/modules/tortoise_bots.conf"
 CHANGES=()
-
-# -- the counts a cohort implies ----------------------------------------------
-expect "no bots need no accounts"                "$(bot_accounts_for 0)"    0
-expect "a cohort under one account's worth takes one" "$(bot_accounts_for 1)" 1
-expect "nine bots fit in one account"            "$(bot_accounts_for 9)"    1
-expect "ten need a second"                       "$(bot_accounts_for 10)"   2
-expect "the default cohort takes three"          "$(bot_accounts_for "$VARIANT_BOTS_DEFAULT")" 3
-expect "a thousand take a hundred and twelve"    "$(bot_accounts_for 1000)" 112
-# The core founds guilds from the same pool, so a small realm gets few of them
-# and a large one stops at what the core ships.
-expect "a small realm gets a guild per account"  "$(bot_guilds_for 20)"     3
-expect "a large one stops at the core's twenty"  "$(bot_guilds_for 1000)"   20
-expect "no bots found no guilds"                 "$(bot_guilds_for 0)"      0
 
 # -- what a cohort size writes into the config --------------------------------
 cat > "$BOT_CONF" <<'CONF'
 [AiPlayerbotConf]
-AiPlayerbot.Enabled = 1
-AiPlayerbot.MinRandomBots = 1000
-AiPlayerbot.MaxRandomBots = 1000
-AiPlayerbot.RandomBotAccountCount = 500
-AiPlayerbot.RandomBotGuildCount = 20
+AiPlayerbot.MinRandomBots = 0
+AiPlayerbot.MaxRandomBots = 0
 AiPlayerbot.RandomBotAccountPrefix = RNDBOT
 CONF
 set_bot_count 20
 expect "both ends of the range move together" \
   "$(conf_get "$BOT_CONF" AiPlayerbot.MinRandomBots)/$(conf_get "$BOT_CONF" AiPlayerbot.MaxRandomBots)" "20/20"
-# The shipped five hundred accounts are four and a half thousand characters,
-# whatever the cohort is set to, which is the number this test exists for.
-expect "the accounts follow the cohort" \
-  "$(conf_get "$BOT_CONF" AiPlayerbot.RandomBotAccountCount)" 3
-expect "and so do the guilds" \
-  "$(conf_get "$BOT_CONF" AiPlayerbot.RandomBotGuildCount)" 3
 expect "the account prefix is left where it is" \
   "$(bot_prefix)" RNDBOT
+
+# -- where a dist is looked for -----------------------------------------------
+# A build writes the configured copy under modules/ in the build tree, and the
+# checkout's template stands in once that tree is cleared; neither is the
+# module's own name for the file.
+BUILT="$ROOT/build/bots/$(variant_conf_generated aiplayerbot.conf)"
+TEMPLATE="$ROOT/src/bots/$(TWOW_VARIANT=bots variant_conf_source aiplayerbot.conf)"
+mkdir -p "${BUILT%/*}" "${TEMPLATE%/*}"; : > "$BUILT"; : > "$TEMPLATE"
+expect "the configured copy in the build tree comes first" \
+  "$(TWOW_VARIANT=bots bot_conf_dist aiplayerbot.conf)" "$BUILT"
+rm -f "$BUILT"
+expect "the checkout's template stands in without it" \
+  "$(TWOW_VARIANT=bots bot_conf_dist aiplayerbot.conf)" "$TEMPLATE"
+rm -f "$TEMPLATE"
+expect "and a config with neither is named as missing" \
+  "$(TWOW_VARIANT=bots bot_conf_dist aiplayerbot.conf || echo none)" none
+expect "a config the table leaves out has no dist to look for" \
+  "$(TWOW_VARIANT=bots bot_conf_dist ahbot.conf || echo none)" none
 
 # -- the config carried forward -----------------------------------------------
 DIST="$TMP/aiplayerbot.conf.dist"
 # The core keeps one dist per config, named after it, which is what the kit
-# asks for by name.
+# asks for by the name it is placed under.
 bot_conf_dist() { printf '%s' "$TMP/$1.dist"; }
 cat > "$DIST" <<'CONF'
 [AiPlayerbotConf]
-AiPlayerbot.Enabled = 1
-AiPlayerbot.MinRandomBots = 1000
-AiPlayerbot.MaxRandomBots = 1000
-AiPlayerbot.RandomBotAccountCount = 500
-AiPlayerbot.RandomBotGuildCount = 20
+AiPlayerbot.MinRandomBots = 0
+AiPlayerbot.MaxRandomBots = 0
 AiPlayerbot.RandomBotAccountPrefix = RNDBOT
 AiPlayerbot.NewSettingUpstreamAdded = 7
 # AiPlayerbot.CommentedOut = 3
@@ -86,7 +79,7 @@ bot_conf_freshen "$BOT_CONF" > /dev/null
 expect "a config with no closing newline still reads back" \
   "$(conf_get "$BOT_CONF" AiPlayerbot.Enabled)" 1
 expect "and the settings after it are their own lines" \
-  "$(conf_get "$BOT_CONF" AiPlayerbot.MinRandomBots)" 1000
+  "$(conf_get "$BOT_CONF" AiPlayerbot.MinRandomBots)" 0
 
 # A config that is not there is not an error: a stock install has none, and
 # every one of these is asked on every run.
@@ -95,35 +88,70 @@ expect "no config carries nothing forward" \
   "$(bot_conf_freshen "$BOT_CONF" && echo ok || echo failed)" ok
 expect "and lists nothing missing" "$(bot_conf_missing "$BOT_CONF")" ""
 
-# -- the auction house ---------------------------------------------------------
-# The bots' own auction house is the same module and the same lifetime: it is
-# placed with them and trades as their characters, so it is on only while there
-# are bots to trade.
-cat > "$TMP/ahbot.conf.dist" <<'CONF'
-[AhbotConf]
-AuctionHouseBot.Seller.Enabled = 0
-AhBot.Enabled = 0
-AhBot.GUID = 0
+# -- what a switch settles ----------------------------------------------------
+# The module's own config sits in a directory of its own under mangosd.conf's,
+# and the world server stops without it. It is placed as shipped: nothing in it
+# follows from the cohort.
+mkdir -p "$TMP/modules"
+cat > "$TMP/modules/tortoise_bots.conf.dist" <<'CONF'
+[TortoiseBotsConf]
+TortoiseBots.LogLevel = 1
 CONF
-rm -f "$BOT_CONF" "$AHBOT_CONF"
+rm -rf "$BOT_CONF" "$SERVER/bin/modules"
 TWOW_VARIANT=bots ensure_variant_conf 20 > /dev/null
-expect "both of the core's configs are placed beside mangosd.conf" \
-  "$([[ -f "$BOT_CONF" && -f "$AHBOT_CONF" ]] && echo both || echo missing)" both
-expect "the auction house is on where there are bots to trade" \
-  "$(conf_get "$AHBOT_CONF" AhBot.Enabled)" 1
-# The bidders are the cohort's characters, so the fallback guid stays as the
-# core ships it.
-expect "and it is left pointing at no character of its own" \
-  "$(conf_get "$AHBOT_CONF" AhBot.GUID)" 0
-TWOW_VARIANT=bots ensure_variant_conf 0 > /dev/null
-expect "a realm that asks for no bots leaves it quiet" \
-  "$(conf_get "$AHBOT_CONF" AhBot.Enabled)" 0
-expect "and the repack's own auction bot stays where the core put it" \
-  "$(conf_get "$AHBOT_CONF" AuctionHouseBot.Seller.Enabled)" 0
-rm -f "$AHBOT_CONF"
+expect "both of the module's configs are placed where it reads them" \
+  "$([[ -f "$BOT_CONF" && -f "$MODULE_CONF" ]] && echo both || echo missing)" both
+expect "the module's own is placed as shipped" \
+  "$(conf_get "$MODULE_CONF" TortoiseBots.LogLevel)" 1
+# The shipped file has the module off and the cohort neither created nor
+# logged in, so the count alone would ask for bots that never appear. The dist
+# above carries none of the three, which is a copy an older kit placed: they
+# are written in rather than looked for.
+expect "the module is switched on" "$(conf_get "$BOT_CONF" AiPlayerbot.Enabled)" 1
+expect "the cohort is created" "$(conf_get "$BOT_CONF" AiPlayerbot.RandomBotAutoCreate)" 1
+expect "and logged in" "$(conf_get "$BOT_CONF" AiPlayerbot.RandomBotAutologin)" 1
+expect "at the count asked for" "$(bot_count)" 20
+# What an older kit placed beside them, and what the core reads unless told
+# not to, are settled on the same pass.
+: > "$SERVER/bin/ahbot.conf"; printf 'LogLevel = 3\n' > "$SERVER/bin/mangosd.conf"
+TWOW_VARIANT=bots ensure_variant_conf 20 > /dev/null
+expect "the auction house config an older kit placed is removed" \
+  "$([[ -e "$SERVER/bin/ahbot.conf" ]] && echo kept || echo gone)" gone
+expect "and the core's own updater is switched off" \
+  "$(conf_get "$SERVER/bin/mangosd.conf" Database.AutoUpdate.Enabled)" 0
+rm -rf "$SERVER/bin/modules"
 TWOW_VARIANT=stock ensure_variant_conf 20 > /dev/null
 expect "the stock core places neither" \
-  "$([[ -f "$AHBOT_CONF" ]] && echo placed || echo none)" none
+  "$([[ -f "$MODULE_CONF" ]] && echo placed || echo none)" none
+
+# -- the checkout a switch replaces -------------------------------------------
+# The clone is stood in for, so the source is what an older kit left: a
+# checkout from a repository the row no longer names, with its build tree.
+git() {
+  if [[ "$1" == clone ]]; then mkdir -p "${*: -1}" "${*: -1}/.git"; : > "${*: -1}/CMakeLists.txt"; return 0; fi
+  command git "$@"
+}
+SRC="$ROOT/src/bots"; rm -rf "$ROOT/src" "$ROOT/build"
+mkdir -p "$SRC" "$ROOT/build/bots"; : > "$ROOT/build/bots/build.ninja"
+command git -C "$SRC" init -q
+command git -C "$SRC" remote add origin https://github.com/Shyalya/tortoise-wow.git
+: > "$SRC/CMakeLists.txt"; command git -C "$SRC" add -A
+command git -C "$SRC" -c user.email=t@t -c user.name=t commit -qm base
+printf 'edited\n' > "$SRC/CMakeLists.txt"
+expect "a checkout with local edits is refused, not replaced" \
+  "$( (TWOW_VARIANT=bots ensure_source) >/dev/null 2>&1 && echo went || echo refused)" refused
+expect "and stays where it is" "$([[ -f "$SRC/CMakeLists.txt" ]] && echo kept || echo gone)" kept
+command git -C "$SRC" checkout -q -- CMakeLists.txt
+expect "one with none is replaced" \
+  "$( (TWOW_VARIANT=bots ensure_source) >/dev/null 2>&1 && echo went || echo refused)" went
+expect "along with the build tree made from it" \
+  "$([[ -e "$ROOT/build/bots/build.ninja" ]] && echo kept || echo gone)" gone
+expect "and the module is cloned into the fresh checkout" \
+  "$([[ -d "$SRC/modules/TortoiseBots/.git" ]] && echo cloned || echo missing)" cloned
+rm -rf "$SRC/modules/TortoiseBots/.git"
+expect "a module directory that is not a checkout is named, not cloned over" \
+  "$(TWOW_VARIANT=bots ensure_source 2>&1 >/dev/null | grep -c 'not a checkout')" 1
+unset -f git
 
 # -- where their levels sit ---------------------------------------------------
 # The core comments these keys out in its own config, so setting one means

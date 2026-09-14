@@ -4,13 +4,13 @@
 
 Run the SIGGZ TurtleWoW 1.18.1 server repack as a fully native Linux server:
 native MariaDB, native `realmd` and `mangosd` compiled from the same source
-the repack is built from (Penqle's tortoise-wow, branch 1181dev). No Wine in
+the repack is built from (tortoise-wow/tortoise-wow, branch main). No Wine in
 the server stack. The game client still runs under Wine, as usual.
 
-`./twow.sh bots on` runs the realm on Shyalya's fork of that core instead, which
-adds a cohort of AI players that level, quest, group, trade and stock the
-auction house between them. Each core keeps its own checkout and build tree, so
-switching between them afterwards is a relink and a restart.
+`./twow.sh bots on` builds TortoiseBots into that core, a module that adds a
+cohort of AI players that level, quest, group and trade. Each core keeps its
+own checkout and build tree, so switching between them afterwards is a relink
+and a restart.
 
 Works on any Linux distro: the dependency check names the right packages
 for Debian/Ubuntu, Fedora, openSUSE and Arch, and finds the MariaDB daemon
@@ -48,8 +48,8 @@ end to end.
 | Server repack | `TurtleWoW_1.18.zip`, 198,874,545 bytes |
 | Map data | `data.zip`, 1,246,273,520 bytes |
 | Client | `1.18.1-7272-Hotfix-2026-04-12` |
-| Core source | Penqle/tortoise-wow, branch `1181dev`, at `b6b0e3d` |
-| Core source, with AI players | Shyalya/tortoise-wow, branch `playerbots-integration-gh`, at `092ad20` |
+| Core source | tortoise-wow/tortoise-wow, branch `main`, at `5fafe43` |
+| AI players | the same core with Sagiroth/TortoiseBots, branch `main`, at `68f820c` |
 
 `./twow.sh doctor` checks an install against what this conversion knows, which
 is the first thing to run when a newer repack appears.
@@ -219,17 +219,22 @@ operation is documented in `server/README.linux.md`.
 ./twow.sh bots --purge     # clear the bots' accounts and characters
 ```
 
-The bots come from Shyalya's fork of the core, compiled once into its own build
-tree; `on` and `off` relink `server/bin` between the two and restart. The
-module's auction house comes with them: it buys and sells as the cohort's own
-characters, so the auction house is stocked from the first boot and goes quiet
-when the realm asks for no bots. Accounts and characters keep their own place
-either way, and `off` offers to remove the bots' accounts and their
-characters. Setup asks about them once, and the
+The bots are TortoiseBots, a module cloned into the core's checkout under
+`modules/TortoiseBots` and compiled in as a static module, once, into a build
+tree of its own; `on` and `off` relink `server/bin` between the two and
+restart. The module reads two files relative to `mangosd.conf`, both placed and
+carried forward by the kit: `aiplayerbot.conf` holds the cohort, and
+`modules/tortoise_bots.conf` the module's own settings. `on` switches the
+cohort on (`AiPlayerbot.Enabled`), sizes it (`MinRandomBots` and
+`MaxRandomBots`), and has the module create its accounts and log them in
+(`RandomBotAutoCreate` and `RandomBotAutologin`); its migrations join the
+core's, applied by stamp and recorded like every other. Accounts and characters
+keep their own place either way, and `off` offers to remove the bots' accounts
+and their characters. Setup asks about them once, and the
 interactive screen carries the cohort size alongside the other settings. A
 conversion with no terminal to ask - the container, and the VM deployer - takes
 the answer from `TWOW_VARIANT=bots` in its environment: `TWOW_VARIANT=bots
-./twow-vm.sh` builds the fork on the guest's one compile.
+./twow-vm.sh` builds the module in on the guest's one compile.
 
 `bots --level` decides where their levels sit. `spread` is the realm the core
 ships: bots at every level from 5 to 60, filling the world. `near` keeps the
@@ -239,11 +244,10 @@ when it falls outside. Both are asked once at `bots on` and changed any time
 after.
 
 Twenty is what a first enable starts with. The cohort size decides how many bot
-characters exist: the core writes nine to every account it is told to create, so
-the count the kit sets carries that too, and the core's own thousand would put
-four and a half thousand characters in every character backup. The first boot
-after `on` writes the cohort and builds its caches, a few minutes; after that
-they are already there.
+characters exist: the module fills the `RNDBOT` accounts it finds and writes
+more as the count asks, and every one of them sits in every character backup.
+The first boot after `on` writes the cohort and builds its caches, a few
+minutes; after that they are already there.
 
 `./twow.sh status` reports what is running. `./twow.sh doctor`
 answers the other question, whether the install is correct: binaries and map
@@ -306,9 +310,10 @@ with `./twow.sh realm --name <name>`, the address with
 
 ## Credits
 
-- SIGGZ (send me a link) for the repack, [Penqle](https://github.com/Penqle/) for the 1181dev source
-- [Shyalya](https://github.com/Shyalya/) for the playerbots integration, and the
-  cmangos playerbots authors whose work it carries
+- SIGGZ (send me a link) for the repack, [Penqle](https://github.com/Penqle/) and the
+  [tortoise-wow](https://github.com/tortoise-wow/tortoise-wow) contributors for the core
+- [Sagiroth](https://github.com/Sagiroth/) for TortoiseBots, and
+  [Shyalya](https://github.com/Shyalya/) for the original playerbots integration it grew from
 - [Kes](https://ko-fi.com/scribblesbykes) (NoGuiltGaming) for the Windows setup guide this follows
 - Ramach for battle-testing the setup on Debian and in a Proxmox LXC container
 - The TurtleWoW preservation [Discord](https://discord.gg/kpnCR644kk)
@@ -333,10 +338,12 @@ License, version 3 or later. `LICENSE` carries the terms, and
     Copyright (C) 2026 Xapne
     Contact: https://github.com/Xapne/twow-linux/issues or xapne@protonmail.ch
 
-The server core is cloned at build time, from Penqle's tortoise-wow or from
-Shyalya's fork of it, and keeps the MaNGOS lineage's own GPL-2.0-or-later terms. The repack, the map data and the
-game client come from elsewhere and are supplied by whoever runs this; the
-copyright in them rests with their authors.
+The server core is cloned at build time from tortoise-wow/tortoise-wow and
+carries its own AGPL-3.0 terms. TortoiseBots, cloned into it for the bots core,
+combines original code with GPL-2.0 donor code and records where each part
+came from in its `LICENCE.md` and `docs/LICENSE_AUDIT.md`. The repack, the map
+data and the game client come from elsewhere and are supplied by whoever runs
+this; the copyright in them rests with their authors.
 
 This exists for preservation and for private local play. That is the spirit the
 setup is written in rather than a term of the license above.

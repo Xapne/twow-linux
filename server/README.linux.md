@@ -91,9 +91,10 @@ before the world is stopped for maintenance, and removed afterwards.
   waiting and applies none.
 - `./clear-logs.sh`: empties the logs/ folder.
 
-`bin/aiplayerbot.conf` and `bin/ahbot.conf` are present on an install running
-the bots core, beside `mangosd.conf` where the core looks for them: the players
-and the auction house they trade on. `../twow.sh bots` reports the cohort,
+`bin/aiplayerbot.conf` and `bin/modules/tortoise_bots.conf` are present on an
+install running the bots core, where the TortoiseBots module looks for them
+relative to `mangosd.conf`: the cohort's settings and the module's own.
+`../twow.sh bots` reports the cohort,
 `bots --count <n>` resizes it, `bots --level near|spread` decides whether their
 levels follow the players online or fill the whole range, and `bots --purge`
 clears the bots' accounts and characters, which the next boot writes again. Settings the core gains upstream
