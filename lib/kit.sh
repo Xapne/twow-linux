@@ -24,10 +24,9 @@ KIT_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # -----------------------------------------------------------------------------
 # Logging
 # -----------------------------------------------------------------------------
-# KIT_TAG is the prefix every line carries, so output identifies the script that
-# produced it. The three spellings are a contract: twow-vm.sh reads "[setup]",
-# "[warn]" and "[error]" out of the guest's log to drive its progress bar and to
-# fail fast.
+# KIT_TAG is the prefix every line carries, so output identifies the script and
+# mode that produced it. "[warn]" and "[error]" are a contract: twow-vm.sh reads
+# them out of the guest's log to fail fast.
 : "${KIT_TAG:=setup}"
 say()  { printf '\033[1;32m[%s]\033[0m %s\n' "$KIT_TAG" "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }

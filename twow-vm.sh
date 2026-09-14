@@ -502,7 +502,7 @@ handoff() {
 }
 
 # =============================================================================
-# The kit speaks in "[setup]" and "[warn]" lines, coloured. They are re-emitted
+# The kit speaks in "[<mode>]" and "[warn]" lines, coloured. They are re-emitted
 # here in this script's gutter style, with the severity kept: a "not running"
 # arrives as a warning and should still look like one.
 relay_kit() {
@@ -513,7 +513,7 @@ relay_kit() {
       "")          continue;;
       "[warn] "*)  warn "${line#"[warn] "}";;
       "[error] "*) warn "${line#"[error] "}";;
-      "[setup] "*) note "${line#"[setup] "}";;
+      "["*"] "*)   note "${line#*\] }";;
       *)           note "$line";;
     esac
   done

@@ -2857,6 +2857,8 @@ mode="${1:-all}"
 # What a message suggesting an environment variable should tell the reader to
 # re-run; the kit prints those and cannot know the mode by itself.
 KIT_RERUN="$0 $mode"
+# Output carries the mode that produced it; 'all' is setup by another name.
+KIT_TAG=${mode/#all/setup}
 case "$mode" in
   setup|all)
     check_deps; ensure_repack; ensure_mapdata; ensure_source; ensure_ace
@@ -2922,7 +2924,6 @@ case "$mode" in
     say "realm answers at $2, listening on ${REALM_BIND:-?}"
     say "restart the server to apply: $0 run" ;;
   bots)
-    KIT_TAG=bots
     case "${2:-}" in
       # Reporting starts nothing: the cohort is read if a database happens to be
       # up, and left unsaid when it is not.
