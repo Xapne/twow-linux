@@ -9,8 +9,8 @@ the server stack. The game client still runs under Wine, as usual.
 
 `./twow.sh bots on` builds TortoiseBots into that core, a module that adds a
 cohort of AI players that level, quest, group and trade. Each core keeps its
-own checkout and build tree, so switching between them afterwards is a relink
-and a restart.
+own checkout and build tree, so switching between them afterwards is a relink,
+with the realm started again by `run`.
 
 Works on any Linux distro: the dependency check names the right packages
 for Debian/Ubuntu, Fedora, openSUSE and Arch, and finds the MariaDB daemon
@@ -221,8 +221,8 @@ operation is documented in `server/README.linux.md`.
 
 The bots are TortoiseBots, a module cloned into the core's checkout under
 `modules/TortoiseBots` and compiled in as a static module, once, into a build
-tree of its own; `on` and `off` relink `server/bin` between the two and
-restart. The module reads two files relative to `mangosd.conf`, both placed and
+tree of its own; `on` and `off` relink `server/bin` between the two and leave
+the realm to be started with `run`. The module reads two files relative to `mangosd.conf`, both placed and
 carried forward by the kit: `aiplayerbot.conf` holds the cohort, and
 `modules/tortoise_bots.conf` the module's own settings. `on` switches the
 cohort on (`AiPlayerbot.Enabled`), sizes it (`MinRandomBots` and
