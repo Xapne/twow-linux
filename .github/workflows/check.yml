@@ -34,3 +34,32 @@ jobs:
 
       - name: Ask upstream whether the carried fixes still apply
         run: ./check.sh --patches
+
+  publish:
+    # The image compose.yaml pulls, built from the release itself, so a pull
+    # hands out the same kit as the tag. A kit older than the core it clones
+    # misses migrations the core expects.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/xapne/twow-linux:latest
+            ghcr.io/xapne/twow-linux:${{ github.ref_name }}
