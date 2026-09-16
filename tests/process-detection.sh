@@ -10,12 +10,14 @@
 . "$KIT/lib/kit.sh"
 
 TMP=$(mktemp -d)
-DECOY="" REAL=""
+DECOY="" REAL="" LOOP="" OTHER=""
 # Invoked by the trap below.
 # shellcheck disable=SC2329
 cleanup() {
   [[ -n "$DECOY" ]] && kill "$DECOY" 2>/dev/null
   [[ -n "$REAL"  ]] && kill "$REAL"  2>/dev/null
+  [[ -n "$LOOP"  ]] && kill "$LOOP"  2>/dev/null
+  [[ -n "$OTHER" ]] && kill "$OTHER" 2>/dev/null
   rm -rf "$TMP"
 }
 trap cleanup EXIT
@@ -43,5 +45,17 @@ sleep 1
 expect "a binary from server/bin is the world server" \
   "$(world_running && echo yes || echo no)" yes
 expect "and server_pids names exactly one" "$(server_pids mangosd | wc -l)" 1
+
+# The restart loop around the world, which a stop has to reach as well: between
+# two crashes there is no mangosd to signal. It is known by where it runs, so
+# another install's loop is not this one's.
+expect "no loop running means no wrapper" "$(wrapper_pids | wc -l)" 0
+mkdir -p "$TMP/other"
+(cd "$TMP/other" && exec -a "bash ./3-world-server.sh" sleep 47) &
+OTHER=$!
+(cd "$TMP/bin" && exec -a "bash ./3-world-server.sh" sleep 47) &
+LOOP=$!
+sleep 1
+expect "the loop in server/bin is the wrapper, another install's is not"   "$(wrapper_pids)" "$LOOP"
 
 exit $RC

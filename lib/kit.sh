@@ -131,6 +131,18 @@ server_pids() {  # $1 binary name in server/bin
 }
 
 world_running() { [[ -n "$(server_pids mangosd)" ]]; }
+
+# The pids of this install's 3-world-server.sh, the loop that brings mangosd
+# back after a crash. It runs from server/ and steps into server/bin, so the
+# working directory tells this install's from any other.
+wrapper_pids() {
+  local p cwd
+  for p in $(pgrep -f '3-world-server\.sh' 2>/dev/null); do
+    cwd=$(readlink -f "/proc/$p/cwd" 2>/dev/null) || continue
+    [[ "$cwd" == "$SERVER" || "$cwd" == "$SERVER/bin" ]] && printf '%s\n' "$p"
+  done
+  return 0
+}
 realm_running() { [[ -n "$(server_pids realmd)" ]]; }
 
 # The terminal a detached world console keeps. Named here rather than in twow.sh

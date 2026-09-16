@@ -2230,6 +2230,10 @@ doctor_all() {
 # is safe to run twice.
 stop_all() {
   local pid i
+  # The wrapper is told before the world it holds: it answers any other exit
+  # by starting the world again, and between two crashes there is no mangosd
+  # to signal at all.
+  for pid in $(wrapper_pids); do kill -TERM "$pid" 2>/dev/null || true; done
   if world_running; then
     say "stopping the world server"
     # SIGTERM is the core's clean shutdown (SIGINT is its restart signal, which
