@@ -1721,7 +1721,9 @@ assert_servers_stopped() {
 update_all() {
   local v src build m_repo m_branch m_path
   v=$(variant_active); src=$(variant_src); build=$(variant_build)
-  [[ -d "$src/.git" ]] || die "no source checkout in ${src#"$ROOT"/}; run: $0 setup"
+  # An older kit's checkout sits in src/ itself; ensure_source moves it.
+  [[ -d "$src/.git" || -d "$ROOT/src/.git" ]] \
+    || die "no source checkout in ${src#"$ROOT"/}; run: $0 setup"
   [[ -x "$SERVER/bin/mangosd" ]] || die "not converted yet; run: $0 setup"
   assert_servers_stopped
   # A checkout an older kit made from another fork, or one still without the

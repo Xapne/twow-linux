@@ -141,4 +141,16 @@ for want in "twow-linux" "Copyright (C) 2026" "Xapne" "ABSOLUTELY NO WARRANTY" \
   expect "the notice carries '$want'" "$rc" 0
 done
 
+# --- update on an install an older kit made ----------------------------------
+# Its checkout sits in src/ itself, and update has to take it from there rather
+# than look for one under the core's name and give up.
+rm -rf "$TMP/src"; mkdir -p "$TMP/src/.git"
+said=$( (update_all) 2>&1 ) || true
+case "$said" in *"no source checkout"*) rc=1;; *) rc=0;; esac
+expect "a checkout in the old layout is a checkout to update" "$rc" 0
+rm -rf "$TMP/src"
+said=$( (update_all) 2>&1 ) || true
+case "$said" in *"no source checkout"*) rc=0;; *) rc=1;; esac
+expect "and none at all is still refused" "$rc" 0
+
 exit $RC
