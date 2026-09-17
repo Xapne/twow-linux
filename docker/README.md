@@ -103,16 +103,33 @@ docker compose exec twow ./twow.sh logs world -f
 `doctor` is the first thing to run when something looks wrong: it reads only,
 and names the fix beside each finding.
 
+The realm is stopped and started inside the container the same way, and the
+container stays up in between, so what `status` reports is what runs:
+
+```
+docker compose exec twow ./twow.sh stop
+docker compose exec twow ./twow.sh run --detached
+```
+
+`docker compose ps` calls the container unhealthy while the realm is down;
+`docker compose restart` is the one-line way to bring it back.
+
 ## AI players
 
 A container converts without a terminal, so the one question `bots on` would
 ask is answered in `.env` instead: `TWOW_VARIANT=bots` builds the core that
 carries them on the container's first and only compile. A container already
-converted switches over the way any install does, at the cost of that compile:
+converted switches over the way any install does, with the realm stopped and
+at the cost of that compile:
 
 ```
+docker compose exec twow ./twow.sh stop
 docker compose exec twow ./twow.sh bots on
+docker compose exec twow ./twow.sh run --detached
 ```
+
+`TWOW_VARIANT` in `.env` wins over a switch made this way, so it is set to
+match or left out.
 
 What the cohort is and what the settings do is in the main README.
 

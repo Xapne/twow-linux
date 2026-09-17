@@ -74,7 +74,9 @@ conf_set "$SERVER/bin/mangosd.conf" BindIP 0.0.0.0
 
 # The console gets a terminal of its own rather than this container's stdin, so
 # nothing that closes a terminal can end the realm and leaving it is a detach.
-"$WORK/twow.sh" run --detached
+# A start that fails still takes the database down in order; this process is
+# pid 1, and the namespace goes with it.
+"$WORK/twow.sh" run --detached || { "$WORK/twow.sh" stop || true; exit 1; }
 
 # Docker stops a container by signalling this process, and the world, realmd and
 # the database want stopping in that order or the next start recovers a dirty
@@ -82,12 +84,21 @@ conf_set "$SERVER/bin/mangosd.conf" BindIP 0.0.0.0
 stopped=0
 trap 'stopped=1; "$WORK/twow.sh" stop || true' TERM INT
 
-# The session is what is watched: 3-world-server.sh brings mangosd back after a
-# crash, so the process alone flaps where the console holds. sleep waits in the
-# background because a signal arriving during a foreground one is held until it
-# returns.
-while console_running; do sleep 5 & wait $! || true; done
-
-(( stopped )) && exit 0
-die "the world console ended on its own. What it last said:
-  docker compose exec twow ./twow.sh logs world"
+# Held up with or without a realm inside: the restart policy brings a container
+# back whatever it exited with, so a realm stopped from inside stays stopped
+# only while this stays. The console ends by somebody's choice, since
+# 3-world-server.sh brings mangosd back after a crash, and is watched to say so.
+# sleep waits in the background because a signal arriving during a foreground
+# one is held until it returns.
+up=1
+while :; do
+  (( stopped )) && exit 0
+  if console_running; then
+    up=1
+  elif (( up )); then
+    up=0
+    say "the world console has ended; the realm stays down until it is started:
+  docker compose exec twow ./twow.sh run --detached     (or: docker compose restart)"
+  fi
+  sleep 5 & wait $! || true
+done
