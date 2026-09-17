@@ -34,8 +34,9 @@ services:
       TWOW_REALM_ADDRESS: "${TWOW_REALM_ADDRESS:-}"
       # Which core to build and run. A container converts without asking
       # anything, so the one question 'bots' would put to a terminal is
-      # answered here instead.
-      TWOW_VARIANT: "${TWOW_VARIANT:-stock}"
+      # answered here instead. Set, it wins over a switch made inside the
+      # container; empty leaves that to what the volume records.
+      TWOW_VARIANT: "${TWOW_VARIANT:-}"
     volumes:
       # Everything a conversion makes: the build, the map data, the database
       # and the characters in it.
