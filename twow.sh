@@ -1533,8 +1533,8 @@ bots_report() {
   other=bots; [[ "$v" == bots ]] && other=stock
   # A tree from a repository the row no longer names is replaced on the switch,
   # so it counts for nothing here.
-  if [[ -d "$(TWOW_VARIANT=$other variant_src)" && -d "$(TWOW_VARIANT=$other variant_build)" \
-        && -z "$(TWOW_VARIANT=$other variant_foreign_origin)" ]]; then
+  if [[ -d "$(VARIANT_TARGET=$other variant_src)" && -d "$(VARIANT_TARGET=$other variant_build)" \
+        && -z "$(VARIANT_TARGET=$other variant_foreign_origin)" ]]; then
     say "$0 bots $([[ "$other" == bots ]] && echo on || echo off) switches in a minute; the $other tree is still here"
   else
     say "$0 bots $([[ "$other" == bots ]] && echo on || echo off) clones and compiles that core once, 10-20 minutes"
@@ -1560,7 +1560,9 @@ bots_switch() {  # $1 target label, $2.. options
   [[ -x "$SERVER/bin/mangosd" ]] || die "not converted yet; run: $0 setup"
   assert_servers_stopped
 
-  export TWOW_VARIANT="$target"
+  VARIANT_TARGET=$target
+  [[ -n "${TWOW_VARIANT:-}" && "$TWOW_VARIANT" != "$target" ]] \
+    && say "TWOW_VARIANT=$TWOW_VARIANT in the environment chose the core at conversion; this switch decides from here"
   say "switching to the $target core; accounts and characters are not touched"
   check_deps
   ensure_source
@@ -2153,6 +2155,10 @@ doctor_core() {
     dr_bad "variant.env says $v, server/bin holds a $built build" \
       "$0 bots $([[ "$v" == bots ]] && echo on || echo off)"
   fi
+  # The environment answered the conversion's question; a switch since is
+  # what the record holds.
+  [[ -n "${TWOW_VARIANT:-}" && -f "$SERVER/variant.env" && "$TWOW_VARIANT" != "$v" ]] \
+    && dr_note "TWOW_VARIANT=$TWOW_VARIANT in the environment; it chose the core at conversion, and the switch to $v is what runs"
 
   if [[ "$v" == bots ]]; then
     if [[ -f "$BOT_CONF" ]]; then

@@ -39,12 +39,12 @@ expect "the bots core clones its module into the checkout" \
 # core reads and the table leaves out is one nobody ever writes.
 expect "the stock core brings no config of its own" "$(variant_field stock conf)" ""
 expect "the bots core brings the players' and the module's own" \
-  "$(TWOW_VARIANT=bots variant_confs | tr '\n' ' ')" "aiplayerbot.conf modules/tortoise_bots.conf "
+  "$(VARIANT_TARGET=bots variant_confs | tr '\n' ' ')" "aiplayerbot.conf modules/tortoise_bots.conf "
 expect "and each names the template it is copied from" \
-  "$(TWOW_VARIANT=bots variant_conf_source modules/tortoise_bots.conf)" \
+  "$(VARIANT_TARGET=bots variant_conf_source modules/tortoise_bots.conf)" \
   "modules/TortoiseBots/conf/tortoise_bots.conf.dist"
 expect "a config the table leaves out has no template" \
-  "$(TWOW_VARIANT=bots variant_conf_source ahbot.conf || echo none)" none
+  "$(VARIANT_TARGET=bots variant_conf_source ahbot.conf || echo none)" none
 
 malformed=0
 for row in "${VARIANT_STREAMS[@]}"; do
@@ -56,17 +56,23 @@ expect "every seeded stream names a known core, a directory, a database and a gl
 
 # -- what is active -----------------------------------------------------------
 expect "an install with nothing written down runs the stock core" "$(variant_active)" stock
+expect "the environment answers while nothing is written down" "$(TWOW_VARIANT=bots variant_active)" bots
 expect "the stock source path"  "$(variant_src)"   "$ROOT/src/stock"
 expect "the stock build path"   "$(variant_build)" "$ROOT/build/stock"
 
 variant_save bots
 expect "a saved core is what the install runs" "$(variant_active)" bots
 expect "and its trees move with it" "$(variant_src)" "$ROOT/src/bots"
-expect "the environment overrides the record" "$(TWOW_VARIANT=stock variant_active)" stock
-expect "a label no table knows falls back to stock" "$(TWOW_VARIANT=eggs variant_active)" stock
+expect "the record wins over the environment" "$(TWOW_VARIANT=stock variant_active)" bots
+expect "a switch names the core it is building before the record does" "$(VARIANT_TARGET=stock variant_active)" stock
+expect "a label no table knows falls back to stock" "$(VARIANT_TARGET=eggs variant_active)" stock
+printf "TWOW_VARIANT=\${TWOW_VARIANT:-bots}\n" > "$SERVER/variant.env"
+expect "a record an older kit wrote reads as its own core" "$(TWOW_VARIANT=stock variant_active)" bots
+variant_save bots
+expect "the record is written as a plain value" "$(grep -c '^TWOW_VARIANT=bots$' "$SERVER/variant.env")" 1
 
 expect "the bots core carries streams of its own" "$(variant_streams | wc -l)" 2
-expect "the stock core carries none" "$(TWOW_VARIANT=stock variant_streams | wc -l)" 0
+expect "the stock core carries none" "$(VARIANT_TARGET=stock variant_streams | wc -l)" 0
 expect "a stream of the module's is applied against the world or the characters" \
   "$(variant_streams | cut -d'|' -f2 | sort -u | grep -cv '^turtle_\(world\|char\)$')" 0
 # The applier orders a stream by the stamp its files open with, so a glob that
@@ -76,7 +82,7 @@ expect "and asks for stamped files by their suffix" \
 
 # -- dependencies -------------------------------------------------------------
 expect "the bots core claims Boost"        "$(variant_needs_dep Boost && echo yes || echo no)" yes
-expect "the stock core does not"           "$(TWOW_VARIANT=stock variant_needs_dep Boost && echo yes || echo no)" no
+expect "the stock core does not"           "$(VARIANT_TARGET=stock variant_needs_dep Boost && echo yes || echo no)" no
 expect "a dependency neither claims is nobody's" "$(variant_claiming_dep cmake)" ""
 expect "and Boost is named as the bots core's" "$(variant_claiming_dep Boost)" bots
 
@@ -114,7 +120,7 @@ git -C "$ROOT/src/bots" diff > "$ROOT/patches/bots/0001-drop-system.patch"
 git -C "$ROOT/src/bots" checkout -q -- CMakeLists.txt
 
 expect "a fix is carried per core" "$(variant_patches | wc -l)" 1
-expect "the stock core carries none" "$(TWOW_VARIANT=stock variant_patches | wc -l)" 0
+expect "the stock core carries none" "$(VARIANT_TARGET=stock variant_patches | wc -l)" 0
 variant_apply_patches >/dev/null
 expect "a fix the checkout lacks is applied" \
   "$(grep -c system "$ROOT/src/bots/CMakeLists.txt")" 0

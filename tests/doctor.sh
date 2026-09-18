@@ -85,6 +85,21 @@ expect "a realm list delay above zero is a fault" "$(tally doctor_config)" 1/0
 RLDELAY=0
 expect "a realm list delay of zero is fine" "$(tally doctor_config)" 0/0
 
+# core - the record against the binaries, and the environment beside them
+printf 'a stock build\n' > "$SERVER/bin/mangosd"; chmod +x "$SERVER/bin/mangosd"
+variant_save stock
+expect "a record matching the binaries is fine" "$(tally doctor_core)" 0/0
+
+printf 'this build reads TortoiseBots.LogLevel\n' > "$SERVER/bin/mangosd"; chmod +x "$SERVER/bin/mangosd"
+expect "a record the binaries contradict is bad" "$(tally doctor_core)" 1/0
+
+printf 'a stock build\n' > "$SERVER/bin/mangosd"; chmod +x "$SERVER/bin/mangosd"
+expect "an environment the record has overtaken is a note" "$(TWOW_VARIANT=bots tally doctor_core)" 0/1
+
+printf "TWOW_VARIANT=\${TWOW_VARIANT:-stock}\n" > "$SERVER/variant.env"
+expect "a record an older kit wrote reads as its own core" "$(TWOW_VARIANT=bots tally doctor_core)" 0/1
+rm -f "$SERVER/variant.env" "$SERVER/bin/mangosd"
+
 # the exit code is what makes it scriptable
 STOCK=2 ADDR=127.0.0.1 RBIND=127.0.0.1 MBIND=127.0.0.1
 doctor_install() { :; }; doctor_database() { :; }

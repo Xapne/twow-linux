@@ -126,14 +126,18 @@ variant_conf_source() {
 
 variant_known() { variant_field "$1" repo >/dev/null 2>&1; }
 
-# What this install runs. The environment wins, which is how a switch builds the
-# core it is switching to before anything has been written down, and how the
-# container is told which one to serve.
+# What this install runs: the record once there is one, and until then the
+# environment, which is how a conversion with no terminal is told which core to
+# build. VARIANT_TARGET names the core a switch is building before the record
+# can say so.
 variant_active() {
-  local v=""
+  local v="${VARIANT_TARGET:-}"
+  # Sourced with the environment cleared: a record an older kit wrote defers
+  # to it.
   # shellcheck source=/dev/null  # written at setup time, absent until then
-  [[ -f "$SERVER/variant.env" ]] && v=$(. "$SERVER/variant.env" 2>/dev/null && printf '%s' "${TWOW_VARIANT:-}")
-  v=${TWOW_VARIANT:-$v}
+  [[ -z "$v" && -f "$SERVER/variant.env" ]] \
+    && v=$(unset TWOW_VARIANT; . "$SERVER/variant.env" 2>/dev/null && printf '%s' "${TWOW_VARIANT:-}")
+  [[ -n "$v" ]] || v=${TWOW_VARIANT:-}
   variant_known "$v" || v=stock
   printf '%s' "$v"
 }
@@ -143,9 +147,9 @@ variant_active() {
 variant_save() {  # $1 label
   cat > "$SERVER/variant.env" <<EOF
 # Written by twow.sh, read by everything that has to know which core this
-# install runs. Change it with '$ROOT/twow.sh bots on|off' rather than by hand;
-# the core in server/bin has to be built to match. The environment still wins.
-TWOW_VARIANT=\${TWOW_VARIANT:-$1}
+# install runs. Changed with '$ROOT/twow.sh bots on|off', which builds the
+# matching core into server/bin first.
+TWOW_VARIANT=$1
 EOF
 }
 

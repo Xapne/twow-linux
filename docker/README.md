@@ -128,8 +128,8 @@ docker compose exec twow ./twow.sh bots on
 docker compose exec twow ./twow.sh run --detached
 ```
 
-`TWOW_VARIANT` in `.env` wins over a switch made this way, so it is set to
-match or left out.
+The volume records the core in use, so a switch made this way holds across
+restarts and image pulls, whatever `.env` said at conversion.
 
 What the cohort is and what the settings do is in the main README.
 
